@@ -1,0 +1,18 @@
+@keyframes bubble {
+    0% {
+        transform: translateY(100vh) scale(1);
+        opacity: 0;
+    }
+    50% {
+        opacity: 0.5;
+    }
+    100% {
+        transform: translateY(-100px) scale(1.4);
+        opacity: 0;
+    }
+}
+
+.animate-bubble {
+    animation: bubble 15s infinite;
+    animation-timing-function: ease-in;
+}

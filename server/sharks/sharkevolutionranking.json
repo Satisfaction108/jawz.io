@@ -1,0 +1,21 @@
+{
+  "shark1": { "babyshark": "babyshark.png" },
+  "shark2": { "zebrashark": "zebrashark.png" },
+  "shark3": { "nurseshark": "nurseshark.png" },
+  "shark4": { "lemonshark": "lemonshark.png" },
+  "shark5": { "blueshark": "blueshark.png" },
+  "shark6": { "goblinshark": "goblinshark.png" },
+  "shark7": { "silkyshark": "silkyshark.png" },
+  "shark8": { "threshershark": "threshershark.png" },
+  "shark9": { "sandtigershark": "sandtigershark.png" },
+  "shark10": { "hammerheadshark": "hammerheadshark.png" },
+  "shark11": { "oceanicwhitetipshark": "oceanicwhitetipshark.png" },
+  "shark12": { "baskingshark": "baskingshark.png" },
+  "shark13": { "megamouthshark": "megamouthshark.png" },
+  "shark14": { "tigershark": "tigershark.png" },
+  "shark15": { "shortfinmakoshark": "shortfinmakoshark.png" },
+  "shark16": { "bullshark": "bullshark.png" },
+  "shark17": { "greatwhiteshark": "greatwhiteshark.png" },
+  "shark18": { "whaleshark": "whaleshark.png" },
+  "shark19": { "killerwhale": "killerwhale.png" }
+}
