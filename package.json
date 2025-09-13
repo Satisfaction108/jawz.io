@@ -3,11 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "concurrently \"npm run dev:next\" \"npm run dev:game\"",
+    "dev:next": "node --max-old-space-size=4096 ./node_modules/next/dist/bin/next dev",
+    "dev:game": "node --max-old-space-size=4096 ./node_modules/.bin/ts-node --transpile-only --project server/tsconfig.json server/game/server.ts",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "game-server": "ts-node server/game/server.ts"
+    "game-server": "node --max-old-space-size=4096 ./node_modules/.bin/ts-node --project server/tsconfig.json server/game/server.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -72,7 +74,7 @@
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "@types/socket.io": "^3.0.1",
-    "@types/socket.io-client": "^1.4.36",
+    "concurrently": "^8.2.2",
     "postcss": "^8.5",
     "tailwindcss": "^4.1.9",
     "ts-node": "^10.9.2",

@@ -434,6 +434,7 @@ function Dashboard({ user, onLogout, onPlay }: { user: UserData; onLogout: () =>
               </div>
             )}
           </div>
+          </div>
         </div>
       </header>
 
@@ -451,7 +452,12 @@ function Dashboard({ user, onLogout, onPlay }: { user: UserData; onLogout: () =>
                 <CardDescription>Jump into a game instantly</CardDescription>
               </CardHeader>
               <CardContent>
-                <Button className="w-full shadow-lg hover:shadow-xl transition-all duration-300">Start Game</Button>
+                <Button 
+                  onClick={onPlay}
+                  className="w-full shadow-lg hover:shadow-xl transition-all duration-300"
+                >
+                  Start Game
+                </Button>
               </CardContent>
             </Card>
 
