@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jawz.io</title>
+    <link rel="icon" href="/favicon.ico" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="bubble-layer"></div>
+
+    <header class="site-header">
+      <div class="brand">
+        <div class="logo">🦈</div>
+        <div class="title">Jawz.io</div>
+      </div>
+      <div class="actions">
+        <a class="github" href="#" rel="noopener">v0.1</a>
+        <button id="btn-login" class="btn-text">Log in</button>
+        <button id="btn-signup" class="btn-primary">Sign up</button>
+        <div id="account-chip" class="account-chip hidden" tabindex="0" aria-haspopup="true" aria-expanded="false">
+          <span class="avatar">👤</span><span id="account-name"></span>
+          <div id="account-menu" class="account-menu hidden">
+            <button id="menu-logout" class="menu-item">Logout</button>
+            <button id="menu-reset" class="menu-item">Reset password</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main id="landing" class="landing">
+      <section class="hero">
+        <h1>Dive Into the Adventure</h1>
+        <p>Hunt, survive, and dominate the ocean depths.</p>
+        <div class="cta">
+          <input id="username" class="input" placeholder="Choose a username" maxlength="16" />
+          <button id="play" class="btn-primary">Play</button>
+        </div>
+      </section>
+
+
+      <section class="features">
+        <div class="card">
+          <h3>Multiplayer Action</h3>
+          <p>Battle other players in real-time underwater combat.</p>
+        </div>
+        <div class="card">
+          <h3>Evolution System</h3>
+          <p>Grow and evolve your shark to become the apex predator.</p>
+        </div>
+        <div class="card">
+          <h3>Ocean Exploration</h3>
+          <p>Discover hidden treasures in the vast ocean depths.</p>
+        </div>
+      </section>
+    </main>
+
+    <div id="game" class="game hidden">
+      <div id="world" class="world"><div id="projectiles" class="projectiles"></div></div>
+      <div id="fx-vignette" class="fx-vignette"></div>
+      <div id="fx-critical" class="fx-critical"></div>
+
+      <div class="hud">
+        <div class="panel">
+          <div class="label">NAVIGATION</div>
+          <div class="row"><span>Ocean Zone:</span><span>4km²</span></div>
+          <div class="row"><span>Position X:</span><span id="posx">0</span></div>
+          <div class="row"><span>Position Y:</span><span id="posy">0</span></div>
+        </div>
+        <div class="minimap">
+          <canvas id="minimap" width="200" height="200"></canvas>
+        </div>
+            <div class="levelbar" role="status" aria-live="polite">
+              <div class="levelbar__label">Level</div>
+              <div class="levelbar__track"><div id="level-fill" class="levelbar__fill" style="width:0%"></div></div>
+              <div class="levelbar__value"><span id="level-text">1</span></div>
+            </div>
+
+        <div class="scorebar" role="status" aria-live="polite">
+          <div class="scorebar__label">Score</div>
+          <div class="scorebar__track"><div id="score-fill" class="scorebar__fill" style="width:0%"></div></div>
+          <div class="scorebar__value"><span id="score-text">0</span></div>
+        </div>
+        <div id="perf" class="perf-chip"><span id="fps">0</span> FPS • <span id="ms">0</span> ms</div>
+        <div id="leaderboard" class="leaderboard" aria-live="polite"></div>
+
+      </div>
+      <div id="death-overlay" class="death-overlay hidden" aria-live="assertive" role="dialog">
+        <div class="death-dialog">
+          <h2>You Died</h2>
+          <div class="death-stats">
+            <div class="stat"><span class="label">Time Played</span><span id="death-time" class="value">0:00</span></div>
+            <div class="stat"><span class="label">Score</span><span id="death-score" class="value">0</span></div>
+            <div class="stat"><span class="label">Level</span><span id="death-level" class="value">1</span></div>
+          </div>
+          <p class="muted">Respawn to continue the fight.</p>
+          <div class="dialog-actions">
+            <button id="btn-respawn" class="btn-primary">Respawn</button>
+            <button id="btn-home" class="btn-text">Go to Home</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Signup Modal -->
+    <div id="modal-signup" class="modal hidden">
+      <div class="dialog">
+        <h3>Create account</h3>
+        <p class="muted">Join the ocean. It takes seconds.</p>
+        <input id="su-username" class="input" placeholder="Username" maxlength="16" />
+        <input id="su-password" class="input" type="password" placeholder="Password" />
+        <div id="su-errors" class="error"></div>
+        <div class="dialog-actions">
+          <button id="su-cancel" class="btn-text">Cancel</button>
+          <button id="su-submit" class="btn-primary">Sign up</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Login Modal -->
+    <div id="modal-login" class="modal hidden">
+      <div class="dialog">
+        <h3>Welcome back</h3>
+        <input id="li-username" class="input" placeholder="Username" maxlength="16" />
+        <input id="li-password" class="input" type="password" placeholder="Password" />
+        <div id="li-errors" class="error"></div>
+        <div class="dialog-actions">
+          <button id="li-cancel" class="btn-text">Cancel</button>
+          <button id="li-submit" class="btn-primary">Log in</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Reset Password Modal -->
+    <div id="modal-reset" class="modal hidden">
+      <div class="dialog">
+        <h3>Reset password</h3>
+        <input id="rp-password" class="input" type="password" placeholder="New password" />
+        <div id="rp-errors" class="error"></div>
+        <div class="dialog-actions">
+          <button id="rp-cancel" class="btn-text">Cancel</button>
+          <button id="rp-submit" class="btn-primary">Update</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+    <script type="module" src="./dist/main.js"></script>
+  </body>
+</html>

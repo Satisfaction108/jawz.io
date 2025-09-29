@@ -1,3 +1,0 @@
- - The game is extremely laggy and is facing a lot of fps issues. 
- - Add extreme interpolation and make sure the game server does not lag
- - My FPS is averaging 8fps and the game server is extremely slow after running npm run dev.

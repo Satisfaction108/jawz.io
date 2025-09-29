@@ -1,36 +1,32 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Jawz.io (Static HTML + TypeScript)
 
-## Getting Started
+Next.js has been fully removed. The project now serves a static client (HTML/CSS/TypeScript) and a separate Socket.IO game server.
 
-First, run the development server:
+## Dev quickstart
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+1. Install deps (once):
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+   npm install
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+2. Build client (creates client/dist):
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+   npm run build
 
-## Learn More
+3. Run dev (client watcher + static server + game server):
 
-To learn more about Next.js, take a look at the following resources:
+   npm run dev
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- Static client: http://localhost:3000
+- Game server (Socket.IO): http://localhost:3002
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Project structure
+- client/index.html: Landing + game UI
+- client/styles.css: Underwater theme styles (no Tailwind)
+- client/main.ts: Game client (Socket.IO, movement, rendering)
+- server/sharks: Shark image assets (served under /sharks)
+- server/game/server.ts: Socket.IO server (unchanged)
+- server/static-server.ts: Minimal TypeScript static file server
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Notes
+- If you change client/main.ts, the dev watcher re-compiles to client/dist automatically.
+- The client connects to ws at http://localhost:3002.

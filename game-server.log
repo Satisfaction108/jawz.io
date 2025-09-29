@@ -1,0 +1,21 @@
+
+> my-v0-project@0.1.0 game-server
+> node --max-old-space-size=4096 ./node_modules/.bin/ts-node --project server/tsconfig.json server/game/server.ts
+
+Error: listen EADDRINUSE: address already in use :::3002
+    at Server.setupListenHandle [as _listen2] (node:net:1937:16)
+    at listenInCluster (node:net:1994:12)
+    at Server.listen (node:net:2099:7)
+    at Object.<anonymous> (/Users/raghavan/Documents/GitHub/jawz.io/server/game/server.ts:91:12)
+    at Module._compile (node:internal/modules/cjs/loader:1554:14)
+    at Module.m._compile (/Users/raghavan/Documents/GitHub/jawz.io/node_modules/ts-node/src/index.ts:1618:23)
+    at node:internal/modules/cjs/loader:1706:10
+    at Object.require.extensions.<computed> [as .ts] (/Users/raghavan/Documents/GitHub/jawz.io/node_modules/ts-node/src/index.ts:1621:12)
+    at Module.load (node:internal/modules/cjs/loader:1289:32)
+    at Function._load (node:internal/modules/cjs/loader:1108:12) {
+  code: 'EADDRINUSE',
+  errno: -48,
+  syscall: 'listen',
+  address: '::',
+  port: 3002
+}
