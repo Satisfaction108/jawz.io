@@ -226,11 +226,31 @@ const FOOD_TARGET_COUNT = 125;
 const FOOD_RADIUS = Math.round(50 * 0.75) / 2; // keep in sync with client FISHFOOD_SIZE/2 (~19px)
 
 const httpServer = createServer();
+
+// Dynamic CORS configuration for development and production
+const allowedOrigins = process.env.NODE_ENV === 'production'
+    ? [
+        process.env.FRONTEND_URL || 'https://jawz.onrender.com',
+        'https://jawz.onrender.com',
+        'https://jawz-io.onrender.com'
+      ]
+    : [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001"
+      ];
+
+console.log('CORS allowed origins:', allowedOrigins);
+
 const io = new Server(httpServer, {
     cors: {
-        origin: ["http://localhost:3000", "http://localhost:3001"],
-        methods: ["GET", "POST"]
-    }
+        origin: allowedOrigins,
+        methods: ["GET", "POST"],
+        credentials: true
+    },
+    transports: ['websocket', 'polling'],
+    allowEIO3: true
 });
 
 const gameState: GameState = {
@@ -824,8 +844,12 @@ setInterval(() => {
 }, TICK_MS);
 
 
-const PORT = 3002;
-httpServer.listen(PORT, () => {
-    console.log(`Game server running on port ${PORT}`);
+// Use environment PORT for production (Render.com), fallback to 3002 for local dev
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3002;
+const HOST = process.env.HOST || '0.0.0.0';
+
+httpServer.listen(PORT, HOST, () => {
+    console.log(`Game server running on ${HOST}:${PORT}`);
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`Map size: ${MAP_SIZE}x${MAP_SIZE} pixels`);
 });

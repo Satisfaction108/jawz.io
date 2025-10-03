@@ -1277,7 +1277,13 @@ function bindGameInteractions(container: HTMLElement) {
 
 function initSocket(username: string) {
   myUsername = username; // Store for respawn
-  socket = io('http://localhost:3002');
+
+  // Dynamic socket URL: use localhost in dev, production URL in production
+  const isDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  const SOCKET_URL = isDev ? 'http://localhost:3002' : window.location.origin;
+
+  console.log('Connecting to socket server:', SOCKET_URL);
+  socket = io(SOCKET_URL);
 
   // Projectiles + death events
   socket.on('projectiles:update', (arr: Array<{ id: number; x: number; y: number }>) => {

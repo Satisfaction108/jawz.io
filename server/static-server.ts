@@ -3,7 +3,10 @@ import { extname, join, normalize } from 'path';
 import { createReadStream, existsSync, statSync } from 'fs';
 import { promises as fsp } from 'fs';
 
-const PORT = 3000;
+// Use environment PORT for production (Render.com), fallback to 3000 for local dev
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const HOST = process.env.HOST || '0.0.0.0';
+
 const ROOTS = [
   join(process.cwd(), 'client'),
   join(process.cwd(), 'public'), // legacy: general static files (not sharks); sharks served from server/sharks
@@ -145,7 +148,8 @@ const server = createServer(async (req, res) => {
   createReadStream(file).pipe(res);
 });
 
-server.listen(PORT, () => {
-  console.log(`Static server + API running at http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`Static server + API running on ${HOST}:${PORT}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 
