@@ -2,10 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Jawz.io</title>
     <link rel="icon" href="/favicon.ico" />
+    <!-- UI styles (landing, auth, modals) - client-side -->
     <link rel="stylesheet" href="./styles.css" />
+    <!-- Game styles (world, sharks, HUD, effects) - server-side -->
+    <link rel="stylesheet" href="/game/styles/game.css" />
   </head>
   <body>
     <div id="bubble-layer"></div>
@@ -20,10 +23,37 @@
         <button id="btn-login" class="btn-text">Log in</button>
         <button id="btn-signup" class="btn-primary">Sign up</button>
         <div id="account-chip" class="account-chip hidden" tabindex="0" aria-haspopup="true" aria-expanded="false">
-          <span class="avatar">👤</span><span id="account-name"></span>
+          <span class="avatar">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+              <circle cx="12" cy="7" r="4"></circle>
+            </svg>
+          </span>
+          <span id="account-name"></span>
           <div id="account-menu" class="account-menu hidden">
-            <button id="menu-logout" class="menu-item">Logout</button>
-            <button id="menu-reset" class="menu-item">Reset password</button>
+            <button id="menu-profile" class="menu-item">
+              <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                <circle cx="12" cy="7" r="4"></circle>
+              </svg>
+              View Profile
+            </button>
+            <button id="menu-reset" class="menu-item">
+              <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+              </svg>
+              Reset Password
+            </button>
+            <div class="menu-divider"></div>
+            <button id="menu-logout" class="menu-item menu-item-danger">
+              <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                <polyline points="16 17 21 12 16 7"></polyline>
+                <line x1="21" y1="12" x2="9" y2="12"></line>
+              </svg>
+              Logout
+            </button>
           </div>
         </div>
       </div>
@@ -42,18 +72,57 @@
 
       <section class="features">
         <div class="card">
+          <div class="card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
+            </svg>
+          </div>
           <h3>Multiplayer Action</h3>
           <p>Battle other players in real-time underwater combat.</p>
         </div>
         <div class="card">
+          <div class="card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+            </svg>
+          </div>
           <h3>Evolution System</h3>
           <p>Grow and evolve your shark to become the apex predator.</p>
         </div>
         <div class="card">
+          <div class="card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+              <path d="M2 12h20"></path>
+            </svg>
+          </div>
           <h3>Ocean Exploration</h3>
           <p>Discover hidden treasures in the vast ocean depths.</p>
         </div>
       </section>
+
+      <footer class="landing-footer">
+        <div class="footer-content">
+          <div class="footer-section">
+            <h4>Jawz.io</h4>
+            <p>The ultimate underwater survival game</p>
+          </div>
+          <div class="footer-section">
+            <h4>Quick Links</h4>
+            <a href="#" class="footer-link">How to Play</a>
+            <a href="#" class="footer-link">Leaderboard</a>
+          </div>
+          <div class="footer-section">
+            <h4>Community</h4>
+            <a href="#" class="footer-link">Discord</a>
+            <a href="#" class="footer-link">Updates</a>
+          </div>
+        </div>
+        <div class="footer-bottom">
+          <p>&copy; 2025 Jawz.io - All rights reserved</p>
+        </div>
+      </footer>
     </main>
 
     <div id="game" class="game hidden">
@@ -71,21 +140,27 @@
         <div class="minimap">
           <canvas id="minimap" width="200" height="200"></canvas>
         </div>
-            <div class="levelbar" role="status" aria-live="polite">
-              <div class="levelbar__label">Level</div>
-              <div class="levelbar__track"><div id="level-fill" class="levelbar__fill" style="width:0%"></div></div>
-              <div class="levelbar__value"><span id="level-text">1</span></div>
-            </div>
+        <div class="stats-container">
+          <div class="levelbar" role="status" aria-live="polite">
+            <div class="levelbar__label">Level</div>
+            <div class="levelbar__track"><div id="level-fill" class="levelbar__fill" style="width:0%"></div></div>
+            <div class="levelbar__value"><span id="level-text">1</span></div>
+          </div>
 
-        <div class="scorebar" role="status" aria-live="polite">
-          <div class="scorebar__label">Score</div>
-          <div class="scorebar__track"><div id="score-fill" class="scorebar__fill" style="width:0%"></div></div>
-          <div class="scorebar__value"><span id="score-text">0</span></div>
+          <div class="scorebar" role="status" aria-live="polite">
+            <div class="scorebar__label">Score</div>
+            <div class="scorebar__track"><div id="score-fill" class="scorebar__fill" style="width:0%"></div></div>
+            <div class="scorebar__value"><span id="score-text">0</span></div>
+          </div>
         </div>
         <div id="perf" class="perf-chip"><span id="fps">0</span> FPS • <span id="ms">0</span> ms</div>
         <div id="leaderboard" class="leaderboard" aria-live="polite"></div>
 
+        <div id="kill-feed" class="kill-feed" aria-live="polite"></div>
+
       </div>
+      <div id="top-notify" class="top-notify" aria-live="assertive"></div>
+
       <div id="death-overlay" class="death-overlay hidden" aria-live="assertive" role="dialog">
         <div class="death-dialog">
           <h2>You Died</h2>
@@ -107,14 +182,28 @@
     <!-- Signup Modal -->
     <div id="modal-signup" class="modal hidden">
       <div class="dialog">
-        <h3>Create account</h3>
-        <p class="muted">Join the ocean. It takes seconds.</p>
-        <input id="su-username" class="input" placeholder="Username" maxlength="16" />
-        <input id="su-password" class="input" type="password" placeholder="Password" />
+        <h3>
+          <svg class="modal-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+            <circle cx="9" cy="7" r="4"></circle>
+            <path d="M22 21v-2a4 4 0 0 0-3-3.87"></path>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+          </svg>
+          Create Account
+        </h3>
+        <p class="muted">Join the ocean and start your adventure!</p>
+        <input id="su-username" class="input" placeholder="Choose a username" maxlength="16" />
+        <input id="su-password" class="input" type="password" placeholder="Create a password" />
+        <div class="password-strength">
+          <div class="strength-bar">
+            <div id="su-strength-fill" class="strength-fill"></div>
+          </div>
+          <div id="su-strength-text" class="strength-text"></div>
+        </div>
         <div id="su-errors" class="error"></div>
         <div class="dialog-actions">
           <button id="su-cancel" class="btn-text">Cancel</button>
-          <button id="su-submit" class="btn-primary">Sign up</button>
+          <button id="su-submit" class="btn-primary">Create Account</button>
         </div>
       </div>
     </div>
@@ -122,13 +211,21 @@
     <!-- Login Modal -->
     <div id="modal-login" class="modal hidden">
       <div class="dialog">
-        <h3>Welcome back</h3>
+        <h3>
+          <svg class="modal-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+            <polyline points="10 17 15 12 10 7"></polyline>
+            <line x1="15" y1="12" x2="3" y2="12"></line>
+          </svg>
+          Welcome Back
+        </h3>
+        <p class="muted">Ready to dive back in?</p>
         <input id="li-username" class="input" placeholder="Username" maxlength="16" />
         <input id="li-password" class="input" type="password" placeholder="Password" />
         <div id="li-errors" class="error"></div>
         <div class="dialog-actions">
           <button id="li-cancel" class="btn-text">Cancel</button>
-          <button id="li-submit" class="btn-primary">Log in</button>
+          <button id="li-submit" class="btn-primary">Log In</button>
         </div>
       </div>
     </div>
@@ -136,13 +233,96 @@
     <!-- Reset Password Modal -->
     <div id="modal-reset" class="modal hidden">
       <div class="dialog">
-        <h3>Reset password</h3>
-        <input id="rp-password" class="input" type="password" placeholder="New password" />
+        <h3>
+          <svg class="modal-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+          </svg>
+          Reset Password
+        </h3>
+        <p class="muted">Choose a new secure password</p>
+        <input id="rp-password" class="input" type="password" placeholder="Enter new password" />
+        <div class="password-strength">
+          <div class="strength-bar">
+            <div id="rp-strength-fill" class="strength-fill"></div>
+          </div>
+          <div id="rp-strength-text" class="strength-text"></div>
+        </div>
+        <input id="rp-confirm" class="input" type="password" placeholder="Confirm new password" />
         <div id="rp-errors" class="error"></div>
         <div class="dialog-actions">
           <button id="rp-cancel" class="btn-text">Cancel</button>
-          <button id="rp-submit" class="btn-primary">Update</button>
+          <button id="rp-submit" class="btn-primary">Update Password</button>
         </div>
+      </div>
+    </div>
+
+    <!-- Profile Modal -->
+    <div id="modal-profile" class="modal hidden">
+      <div class="dialog">
+        <h3>
+          <svg class="modal-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+            <circle cx="12" cy="7" r="4"></circle>
+          </svg>
+          Profile
+        </h3>
+        <div class="profile-stats">
+          <div class="stat-card">
+            <div class="stat-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
+                <line x1="7" y1="2" x2="7" y2="22"></line>
+                <line x1="17" y1="2" x2="17" y2="22"></line>
+                <line x1="2" y1="12" x2="22" y2="12"></line>
+                <line x1="2" y1="7" x2="7" y2="7"></line>
+                <line x1="2" y1="17" x2="7" y2="17"></line>
+                <line x1="17" y1="17" x2="22" y2="17"></line>
+                <line x1="17" y1="7" x2="22" y2="7"></line>
+              </svg>
+            </div>
+            <div class="stat-info">
+              <div class="stat-label">Games Played</div>
+              <div id="profile-games" class="stat-value">0</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+              </svg>
+            </div>
+            <div class="stat-info">
+              <div class="stat-label">Total Score</div>
+              <div id="profile-score" class="stat-value">0</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="16" y1="2" x2="16" y2="6"></line>
+                <line x1="8" y1="2" x2="8" y2="6"></line>
+                <line x1="3" y1="10" x2="21" y2="10"></line>
+              </svg>
+            </div>
+            <div class="stat-info">
+              <div class="stat-label">Member Since</div>
+              <div id="profile-date" class="stat-value">-</div>
+            </div>
+          </div>
+        </div>
+        <div class="dialog-actions">
+          <button id="profile-close" class="btn-primary">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Loading Overlays -->
+    <div id="loading-overlay" class="loading-overlay hidden">
+      <div class="loading-content">
+        <div class="loading-spinner"></div>
+        <div id="loading-text" class="loading-text">Loading...</div>
       </div>
     </div>
 

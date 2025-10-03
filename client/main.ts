@@ -21,8 +21,10 @@ type Player = {
 const MAP_SIZE = 4000;
 const SELF_SPEED = 495; // px/s (1.5x boost)
 
-const SHARK_SIZE = 256; // px (exact baby shark sprite size)
+const SHARK_SIZE = Math.round(256 * (2/3)); // px (2/3 of original 256px = ~171px)
 const SHARK_HALF = SHARK_SIZE / 2;
+const SHARK_MASK_SIZE = 256; // Original mask size (masks are still 256x256)
+const SHARK_SCALE = SHARK_SIZE / SHARK_MASK_SIZE; // Scale factor for collision detection (2/3)
 const CAMERA_ZOOM = 0.8; // wider FOV (1.0 = no zoom)
 
 // Visual constants
@@ -39,6 +41,7 @@ let levelSteps: number[] = []; // XP needed to go from level L to L+1, zero-base
 let levelsReady: boolean = false;
 
 let selfId: string | null = null;
+let myUsername: string = 'Player'; // Store username for respawn
 let world: HTMLDivElement;
 let gameEl: HTMLDivElement;
 let landingEl: HTMLElement;
@@ -56,16 +59,30 @@ let btnHome: HTMLButtonElement;
 let deathScoreEl: HTMLElement; let deathLevelEl: HTMLElement; let deathTimeEl: HTMLElement;
 let sessionStartMs = 0;
 
-// --- FX toggles (modular, easy to turn on/off) ---
+// --- FX toggles (modular, easy to turn on/off) - optimized for performance ---
 const FX = {
   damageShake: true,
   redVignette: true,
   criticalBlur: true,
   waterRipples: true,
   impactFlash: true,
-  waterTrail: true,
+  waterTrail: true,  // Throttled to reduce DOM creation
   scorePopup: true,
 };
+
+// Performance: limit concurrent effect elements
+const MAX_RIPPLES = 8;
+const MAX_TRAIL_BUBBLES = 12;
+const MAX_SCORE_POPUPS = 6;
+let activeRipples = 0;
+let activeTrailBubbles = 0;
+let activeScorePopups = 0;
+
+// Track active score popups for position updates
+const activeScorePopupEls: Array<{ el: HTMLDivElement; playerId: string; startTime: number }> = [];
+
+// Track which players have had death animation triggered
+const deathAnimTriggered = new Set<string>();
 
 // FX state and helpers
 let fxVignetteEl: HTMLDivElement;
@@ -90,14 +107,15 @@ function updateCriticalOverlay(curHp: number) {
   if (FX.criticalBlur && curHp <= 20) fxCriticalEl.classList.add('active');
   else fxCriticalEl.classList.remove('active');
 }
-function spawnRipple(x: number, y: number, size = 56) {
-  if (!FX.waterRipples) return;
+function spawnRipple(x: number, y: number, size = 37) { // 2/3 of 56px = ~37px
+  if (!FX.waterRipples || activeRipples >= MAX_RIPPLES) return;
+  activeRipples++;
   const el = document.createElement('div');
   el.className = 'ripple';
   el.style.width = `${size}px`; el.style.height = `${size}px`;
   el.style.left = `${x}px`; el.style.top = `${y}px`;
   world.appendChild(el);
-  setTimeout(() => el.remove(), 450);
+  setTimeout(() => { el.remove(); activeRipples--; }, 450);
 }
 function markSharkHit(id: string) {
   if (!FX.impactFlash) return;
@@ -107,44 +125,134 @@ function markSharkHit(id: string) {
   setTimeout(() => el.classList.remove('shark--hit'), 140);
 }
 function spawnTrailBubbleAt(x: number, y: number, angle: number) {
-  if (!FX.waterTrail) return;
-  const el = document.createElement('div');
-  el.className = 'trail-bubble';
+  if (!FX.waterTrail || activeTrailBubbles >= MAX_TRAIL_BUBBLES) return;
 
-  // Compute the world-space tail anchor by rotating the sprite-local tail point around sprite center
-  const rot = angle + Math.PI; // matches sprite rotate offset
-  const cos = Math.cos(rot), sin = Math.sin(rot);
-  let ax = x + SHARK_HALF, ay = y + SHARK_HALF; // default: center
-  if (tailAnchor) {
-    const dx = tailAnchor.x - SHARK_HALF;
-    const dy = tailAnchor.y - SHARK_HALF;
-    ax = x + SHARK_HALF + (dx * cos - dy * sin);
-    ay = y + SHARK_HALF + (dx * sin + dy * cos);
+  // Spawn 2-3 bubbles spread across the tail for a fuller wake effect
+  const numBubbles = 2 + (Math.random() < 0.3 ? 1 : 0); // 2-3 bubbles
+
+  for (let i = 0; i < numBubbles; i++) {
+    if (activeTrailBubbles >= MAX_TRAIL_BUBBLES) break;
+
+    activeTrailBubbles++;
+    const el = document.createElement('div');
+    el.className = 'trail-bubble';
+
+    // Compute world-space tail point by rotating a sprite-local point on the tail edge around sprite center
+    const rot = angle + Math.PI; // matches sprite rotate offset
+    const cos = Math.cos(rot), sin = Math.sin(rot);
+    let lx = SHARK_HALF, ly = SHARK_HALF; // default: center (in render space)
+
+    // Sample different points along the tail edge for spread
+    // Note: tailEdge and tailAnchor are in mask space (256x256), need to scale to render space (171x171)
+    if (tailEdge && tailEdge.length) {
+      // Divide tail into segments and pick from different segments for spread
+      const segment = Math.floor((i / numBubbles) * tailEdge.length);
+      const segmentSize = Math.floor(tailEdge.length / numBubbles);
+      const idx = segment + Math.floor(Math.random() * segmentSize);
+      const p = tailEdge[Math.min(idx, tailEdge.length - 1)];
+      lx = p.x * SHARK_SCALE; ly = p.y * SHARK_SCALE; // Scale from mask to render space
+    } else if (tailAnchor) {
+      lx = tailAnchor.x * SHARK_SCALE; ly = tailAnchor.y * SHARK_SCALE; // Scale from mask to render space
+      // Add vertical spread even without tail edge data
+      ly += (Math.random() * 13) - 6.5; // 2/3 of ±10px = ±6.5px vertical spread
+    }
+
+    const dx = lx - SHARK_HALF;
+    const dy = ly - SHARK_HALF;
+    const ax = x + SHARK_HALF + (dx * cos - dy * sin);
+    const ay = y + SHARK_HALF + (dx * sin + dy * cos);
+
+    // Emit slightly behind the facing direction with lateral spread for a fuller wake
+    const baseOff = 5 + Math.random() * 8; // 2/3 of (8..20) = 5..13 px behind
+    const spread = (Math.random() * 20) - 10; // 2/3 of ±15 = ±10 px sideways
+    const fx = Math.cos(angle), fy = Math.sin(angle);
+    const px = -Math.sin(angle), py = Math.cos(angle);
+    const bx = ax - fx * baseOff + px * spread;
+    const by = ay - fy * baseOff + py * spread;
+
+    // Use CSS variables consumed by the animation so transform isn't overridden
+    // Trail bubble is 16px, so offset by half (8px) - scaled to 2/3 = ~11px, offset by ~5px
+    el.style.setProperty('--x', `${Math.round(bx - 5)}px`); // 2/3 of 8px offset
+    el.style.setProperty('--y', `${Math.round(by - 5)}px`);
+    world.appendChild(el);
+    setTimeout(() => { el.remove(); activeTrailBubbles--; }, 900);
   }
-
-  // Emit slightly behind the facing direction with a small lateral spread
-  const baseOff = 8 + Math.random() * 6;   // 8..14 px behind the tail
-  const spread = (Math.random() * 16) - 8; // -8..+8 px sideways
-  const fx = Math.cos(angle), fy = Math.sin(angle);
-  const px = -Math.sin(angle), py = Math.cos(angle);
-  const bx = ax - fx * baseOff + px * spread;
-  const by = ay - fy * baseOff + py * spread;
-
-  // Use CSS variables consumed by the animation so transform isn't overridden
-  el.style.setProperty('--x', `${Math.round(bx - 8)}px`);
-  el.style.setProperty('--y', `${Math.round(by - 8)}px`);
-  world.appendChild(el);
-  setTimeout(() => el.remove(), 900);
 }
-function spawnScorePopup(x: number, y: number, delta: number) {
-  if (!FX.scorePopup) return;
+function spawnScorePopup(playerId: string, delta: number) {
+  if (!FX.scorePopup || activeScorePopups >= MAX_SCORE_POPUPS || !selfId) return;
+  activeScorePopups++;
   const el = document.createElement('div');
   el.className = 'score-popup';
   el.textContent = `+${delta}`;
-  el.style.left = `${x + SHARK_HALF}px`;
-  el.style.top = `${y - 10}px`;
+
+  // Initial position will be updated in render loop
+  const p = players[playerId];
+  if (p) {
+    el.style.left = `${p.x + SHARK_HALF}px`;
+    el.style.top = `${p.y - 27}px`; // 2/3 of -40px = ~-27px
+  }
+
   world.appendChild(el);
-  setTimeout(() => el.remove(), 800);
+
+  // Track this popup for position updates
+  const popupData = { el, playerId, startTime: performance.now() };
+  activeScorePopupEls.push(popupData);
+
+  setTimeout(() => {
+    el.remove();
+    activeScorePopups--;
+    // Remove from tracking array
+    const idx = activeScorePopupEls.indexOf(popupData);
+    if (idx !== -1) activeScorePopupEls.splice(idx, 1);
+  }, 800);
+}
+
+// Spawn death particles and trigger death animation
+function triggerDeathAnimation(playerId: string) {
+  const p = players[playerId];
+  if (!p) return;
+
+  const el = document.getElementById(`p-${playerId}`) as HTMLDivElement | null;
+  if (!el) return;
+
+  // Set CSS variables for death animation (capture current position)
+  el.style.setProperty('--death-x', `${Math.round(p.x)}px`);
+  el.style.setProperty('--death-y', `${Math.round(p.y)}px`);
+
+  const imgEl = el.querySelector('.shark__img') as HTMLDivElement | null;
+  if (imgEl) {
+    const currentTransform = imgEl.style.transform || '';
+    const angleMatch = currentTransform.match(/rotate\(([^)]+)\)/);
+    const flipMatch = currentTransform.match(/scaleY\(([^)]+)\)/);
+    const angle = angleMatch ? angleMatch[1] : '0rad';
+    const flip = flipMatch ? flipMatch[1] : '1';
+    el.style.setProperty('--death-angle', angle);
+    el.style.setProperty('--death-flip', flip);
+  }
+
+  // Spawn death particles (12 particles in random directions)
+  const cx = p.x + SHARK_HALF;
+  const cy = p.y + SHARK_HALF;
+  for (let i = 0; i < 12; i++) {
+    const particle = document.createElement('div');
+    particle.className = 'death-particle';
+    const angle = (i / 12) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
+    const dist = 40 + Math.random() * 53; // 2/3 of (60 + 80) = 40 + 53
+    const px = Math.cos(angle) * dist;
+    const py = Math.sin(angle) * dist;
+    particle.style.setProperty('--px', `${px}px`);
+    particle.style.setProperty('--py', `${py}px`);
+    particle.style.left = `${cx}px`;
+    particle.style.top = `${cy}px`;
+    world.appendChild(particle);
+    setTimeout(() => particle.remove(), 1000);
+  }
+
+  // Large ripple effect at death location (2/3 of 120px = 80px)
+  spawnRipple(Math.round(cx), Math.round(cy), 80);
+
+  // Note: Shark element will be removed by server's 'player:left' event after 1.2s
+  // This matches the death animation duration
 }
 
 function screenToWorld(cx: number, cy: number): { x: number; y: number } {
@@ -167,22 +275,45 @@ function aimCoords(): { cx: number; cy: number } {
   const m = mouse || { x: window.innerWidth / 2, y: window.innerHeight / 2 };
   return { cx: m.x, cy: m.y };
 }
+
 function tryFireOnce() {
   const now = performance.now();
-  if (now - lastClientShotAt < CLIENT_COOLDOWN_MS - 12) return; // tiny slack
+  const timeSinceLastShot = now - lastClientShotAt;
+
+  // Enforce client-side cooldown with small tolerance
+  if (timeSinceLastShot < CLIENT_COOLDOWN_MS - 20) {
+    // console.log(`Client cooldown: ${timeSinceLastShot.toFixed(0)}ms < ${CLIENT_COOLDOWN_MS}ms`);
+    return;
+  }
+
   lastClientShotAt = now;
   const { cx, cy } = aimCoords();
   emitShootAtClientCoords(cx, cy);
 }
+
 function startHoldFire() {
   if (fireHeld) return;
   fireHeld = true;
-  tryFireOnce();
-  fireTimer = window.setInterval(tryFireOnce, CLIENT_COOLDOWN_MS);
+  tryFireOnce(); // Fire immediately
+
+  // Use requestAnimationFrame loop instead of setInterval for more precise timing
+  if (fireTimer !== null) { cancelAnimationFrame(fireTimer); }
+
+  const fireLoop = () => {
+    if (!fireHeld) return;
+    tryFireOnce();
+    fireTimer = requestAnimationFrame(fireLoop);
+  };
+
+  fireTimer = requestAnimationFrame(fireLoop);
 }
+
 function stopHoldFire() {
   fireHeld = false;
-  if (fireTimer !== null) { clearInterval(fireTimer); fireTimer = null; }
+  if (fireTimer !== null) {
+    cancelAnimationFrame(fireTimer);
+    fireTimer = null;
+  }
 }
 
 // Projectiles rendering (bubbles)
@@ -214,9 +345,9 @@ function updateProjectiles(updates: Array<{ id: number; x: number; y: number }>)
     if (!seen.has(id)) {
       if (!el.classList.contains('out')) {
         const pos = projectiles[id];
-        if (pos) spawnRipple(Math.round(pos.x), Math.round(pos.y), 42);
-        el.classList.add('out');
-        setTimeout(() => el.remove(), 240);
+        if (pos) spawnRipple(Math.round(pos.x), Math.round(pos.y), 28); // 2/3 of 42px = 28px
+        // Remove bullet instantly on contact (no fade delay)
+        el.remove();
       }
       delete projectiles[id];
     }
@@ -252,6 +383,7 @@ let selfPosLogIdx = 0;
 function startCameraTicker() {
   // Disabled ultra-high-frequency ticker to avoid CPU spikes; camera is updated in render()
   if (cameraTicker !== null) { clearInterval(cameraTicker); cameraTicker = null; }
+
 }
 
 // Game entities
@@ -294,6 +426,33 @@ function computeTailAnchorFromAlpha(alpha: Uint8ClampedArray, size: number): { x
   return { x: maxX, y: yMid };
 }
 
+// Densely sample the rightmost opaque edge rows to represent the tail surface
+let tailEdge: Array<{ x: number; y: number }> | null = null;
+function computeTailEdgeFromAlpha(alpha: Uint8ClampedArray, size: number): Array<{ x: number; y: number }> {
+  const A = (x: number, y: number) => alpha[(y * size + x) * 4 + 3];
+  let maxX = -1;
+  const rightmost: number[] = new Array(size).fill(-1);
+  for (let y = 0; y < size; y++) {
+    for (let x = size - 1; x >= 0; x--) {
+      if (A(x, y) > 10) { rightmost[y] = x; if (x > maxX) maxX = x; break; }
+    }
+  }
+  const pts: Array<{ x: number; y: number }> = [];
+  if (maxX >= 0) {
+    for (let y = 0; y < size; y++) {
+      const rx = rightmost[y];
+      if (rx >= maxX - 2 && rx >= 0) pts.push({ x: rx, y });
+    }
+  }
+  // Thin out to reduce overdraw while keeping good coverage
+  if (pts.length > 60) {
+    const thin: Array<{ x: number; y: number }> = [];
+    const step = Math.max(1, Math.floor(pts.length / 40));
+    for (let i = 0; i < pts.length; i += step) thin.push(pts[i]);
+    return thin;
+  }
+  return pts;
+}
 
 function loadCollisionMaps(): Promise<void> {
   return new Promise((resolve) => {
@@ -313,7 +472,7 @@ function loadCollisionMaps(): Promise<void> {
           const res = await fetch(p);
           if (res.ok) {
             const txt = await res.text();
-            const s = SHARK_SIZE;
+            const s = SHARK_MASK_SIZE; // Use mask size (256), not render size
             // Strip everything except 0/1 and newlines, then flatten
             const flat = txt.replace(/[^01\n]/g, '').replace(/\n+/g, '');
             if (flat.length >= s * s) {
@@ -324,8 +483,9 @@ function loadCollisionMaps(): Promise<void> {
                 data[off] = 0; data[off+1] = 0; data[off+2] = 0; data[off+3] = v;
               }
               sharkAlpha = data;
-              // Compute tail anchor from mask (sprite is left-facing by default; tail is the rightmost opaque edge)
-              tailAnchor = computeTailAnchorFromAlpha(sharkAlpha, SHARK_SIZE);
+              // Compute tail anchor + edge from mask (sprite is left-facing by default; tail is the rightmost opaque edge)
+              tailAnchor = computeTailAnchorFromAlpha(sharkAlpha, SHARK_MASK_SIZE);
+              tailEdge = computeTailEdgeFromAlpha(sharkAlpha, SHARK_MASK_SIZE);
               usedMask = true;
               break;
             }
@@ -335,18 +495,20 @@ function loadCollisionMaps(): Promise<void> {
       if (!usedMask) {
         const sharkImg = new Image(); sharkImg.src = '/sharks/Baby%20Shark.png';
         sharkImg.onload = () => {
-          const c = document.createElement('canvas'); c.width = SHARK_SIZE; c.height = SHARK_SIZE;
+          // Use SHARK_MASK_SIZE (256) for collision detection, not render size
+          const c = document.createElement('canvas'); c.width = SHARK_MASK_SIZE; c.height = SHARK_MASK_SIZE;
           const cctx = c.getContext('2d')!;
-          cctx.clearRect(0,0,SHARK_SIZE,SHARK_SIZE);
+          cctx.clearRect(0,0,SHARK_MASK_SIZE,SHARK_MASK_SIZE);
           const nw = sharkImg.naturalWidth || sharkImg.width;
           const nh = sharkImg.naturalHeight || sharkImg.height;
-          const scale = Math.max(SHARK_SIZE / nw, SHARK_SIZE / nh); // cover
+          const scale = Math.max(SHARK_MASK_SIZE / nw, SHARK_MASK_SIZE / nh); // cover
           const dw = nw * scale, dh = nh * scale;
-          const dx = (SHARK_SIZE - dw) / 2, dy = (SHARK_SIZE - dh) / 2; // centered
+          const dx = (SHARK_MASK_SIZE - dw) / 2, dy = (SHARK_MASK_SIZE - dh) / 2; // centered
           cctx.drawImage(sharkImg, dx, dy, dw, dh);
-          sharkAlpha = cctx.getImageData(0, 0, SHARK_SIZE, SHARK_SIZE).data; // RGBA
-          // Compute tail anchor from image alpha if text mask not provided
-          tailAnchor = computeTailAnchorFromAlpha(sharkAlpha, SHARK_SIZE);
+          sharkAlpha = cctx.getImageData(0, 0, SHARK_MASK_SIZE, SHARK_MASK_SIZE).data; // RGBA
+          // Compute tail anchor + edge from image alpha if text mask not provided
+          tailAnchor = computeTailAnchorFromAlpha(sharkAlpha, SHARK_MASK_SIZE);
+          tailEdge = computeTailEdgeFromAlpha(sharkAlpha, SHARK_MASK_SIZE);
           done();
         };
         return; // wait for onload -> done()
@@ -424,13 +586,13 @@ function pixelPerfectHit(me: Player, food: Food): boolean {
   // Quick circle check first (slightly more forgiving)
   const cx = me.x + SHARK_HALF, cy = me.y + SHARK_HALF;
   const dx = cx - food.x, dy = cy - food.y;
-  const maxDist = SHARK_HALF + FOOD_RADIUS + 16; // increased tolerance to reduce near-miss rejections
+  const maxDist = SHARK_HALF + FOOD_RADIUS + 20; // increased tolerance
   if ((dx*dx + dy*dy) > (maxDist*maxDist)) return false;
 
   const rot = me.angle + Math.PI;
   const cos = Math.cos(rot), sin = Math.sin(rot);
 
-  const sSize = SHARK_SIZE;
+  const sSize = SHARK_MASK_SIZE; // Use mask size (256), not render size (171)
   const fSize = foodAlphaSize;
   const halfF = FOOD_RADIUS;
 
@@ -447,16 +609,17 @@ function pixelPerfectHit(me: Player, food: Food): boolean {
       // world position of this food pixel (treat each pixel center)
       const wx = food.x - halfF + fx + 0.5;
       const wy = food.y - halfF + fy + 0.5;
-      // vector from shark center
+      // vector from shark center (in render space)
       const vx = wx - cx; const vy = wy - cy;
       // rotate by -rot: x' = x cos + y sin ; y' = -x sin + y cos
       const lx = vx * cos + vy * sin;
       const ly = -vx * sin + vy * cos;
-      const sx = Math.round(lx + sSize / 2);
-      const sy = Math.round(ly + sSize / 2);
-      // 3x3 neighborhood to compensate for rotation/rounding
-      for (let oy = -1; oy <= 1; oy++) {
-        for (let ox = -1; ox <= 1; ox++) {
+      // Scale to mask space (mask is 256x256, shark renders at 171x171)
+      const sx = Math.round((lx / SHARK_SCALE) + sSize / 2);
+      const sy = Math.round((ly / SHARK_SCALE) + sSize / 2);
+      // 5x5 neighborhood for better collision detection with scaled sprites
+      for (let oy = -2; oy <= 2; oy++) {
+        for (let ox = -2; ox <= 2; ox++) {
           const sa = sampleShark(sx + ox, sy + oy);
           if (sa !== 0) return true; // colored pixel overlap
         }
@@ -493,7 +656,11 @@ let menuReset: HTMLButtonElement;
 // Modals and inputs
 let modalSignup: HTMLDivElement, suUser: HTMLInputElement, suPass: HTMLInputElement, suErrors: HTMLElement, suCancel: HTMLButtonElement, suSubmit: HTMLButtonElement;
 let modalLogin: HTMLDivElement, liUser: HTMLInputElement, liPass: HTMLInputElement, liErrors: HTMLElement, liCancel: HTMLButtonElement, liSubmit: HTMLButtonElement;
-let modalReset: HTMLDivElement, rpPass: HTMLInputElement, rpErrors: HTMLElement, rpCancel: HTMLButtonElement, rpSubmit: HTMLButtonElement;
+let modalReset: HTMLDivElement, rpPass: HTMLInputElement, rpConfirm: HTMLInputElement, rpErrors: HTMLElement, rpCancel: HTMLButtonElement, rpSubmit: HTMLButtonElement;
+let modalProfile: HTMLDivElement, profileClose: HTMLButtonElement;
+let suStrengthFill: HTMLElement, suStrengthText: HTMLElement;
+let rpStrengthFill: HTMLElement, rpStrengthText: HTMLElement;
+let menuProfile: HTMLButtonElement;
 
 type Session = { username: string; timeCreated: string };
 const API_BASE = '';
@@ -502,11 +669,46 @@ function hashPassword(password: string): string {
   return btoa(password + 'jawz_salt');
 }
 
-function validatePassword(password: string): { isValid: boolean; errors: string[] } {
+function validatePassword(password: string): { isValid: boolean; errors: string[]; strength: 'weak' | 'medium' | 'strong' } {
   const errors: string[] = [];
   if (password.length < 6) errors.push('Password must be at least 6 characters');
   if (!/\d/.test(password)) errors.push('Password must include at least 1 number');
-  return { isValid: errors.length === 0, errors };
+
+  // Calculate strength
+  let strength: 'weak' | 'medium' | 'strong' = 'weak';
+  if (password.length >= 8 && /[A-Z]/.test(password) && /[a-z]/.test(password) && /\d/.test(password)) {
+    strength = 'strong';
+  } else if (password.length >= 6 && /\d/.test(password)) {
+    strength = 'medium';
+  }
+
+  return { isValid: errors.length === 0, errors, strength };
+}
+
+function updatePasswordStrength(password: string, fillEl: HTMLElement, textEl: HTMLElement) {
+  const result = validatePassword(password);
+
+  // Remove all strength classes
+  fillEl.classList.remove('weak', 'medium', 'strong');
+  textEl.classList.remove('weak', 'medium', 'strong');
+
+  if (password.length === 0) {
+    fillEl.style.width = '0%';
+    textEl.textContent = '';
+    return;
+  }
+
+  // Add appropriate class
+  fillEl.classList.add(result.strength);
+  textEl.classList.add(result.strength);
+
+  // Update text
+  const strengthText = {
+    weak: 'Weak',
+    medium: 'Medium',
+    strong: 'Strong'
+  };
+  textEl.textContent = strengthText[result.strength];
 }
 
 function getSession(): Session | null {
@@ -517,6 +719,22 @@ function clearSession() { localStorage.removeItem('jawz_user'); }
 
 function openModal(el: HTMLElement) { el.classList.remove('hidden'); }
 function closeModal(el: HTMLElement) { el.classList.add('hidden'); }
+
+function showLoading(text: string) {
+  const overlay = document.getElementById('loading-overlay');
+  const loadingText = document.getElementById('loading-text');
+  if (overlay && loadingText) {
+    loadingText.textContent = text;
+    overlay.classList.remove('hidden');
+  }
+}
+
+function hideLoading() {
+  const overlay = document.getElementById('loading-overlay');
+  if (overlay) {
+    overlay.classList.add('hidden');
+  }
+}
 
 async function signup(username: string, password: string): Promise<{ ok: boolean; error?: string; data?: Session }>{
   const v = validatePassword(password);
@@ -578,7 +796,7 @@ function setUIFromSession() {
   }
 }
 
-function createBubbleLayer(n = 24) {
+function createBubbleLayer(n = 12) {  // Reduced from 24 to 12 for better performance
   for (let i = 0; i < n; i++) {
     const b = document.createElement('img');
     b.className = 'bubble';
@@ -597,7 +815,7 @@ function createBubbleLayer(n = 24) {
   }
 }
 
-// Camera helpers: always keep the local player's shark centered on screen
+// Camera helpers: always keep the local player's shark centered on screen with border limits
 function updateCameraToSelf() {
   if (!selfId) return;
   const self = players[selfId];
@@ -605,8 +823,37 @@ function updateCameraToSelf() {
 
   // Compute CSS-pixel offsets so the shark center is exactly at the viewport center
   const z = CAMERA_ZOOM;
-  camera.x = Math.round((window.innerWidth / 2) - (self.x + SHARK_HALF) * z);
-  camera.y = Math.round((window.innerHeight / 2) - (self.y + SHARK_HALF) * z);
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  // Calculate desired camera position (centered on shark)
+  let cx = Math.round((vw / 2) - (self.x + SHARK_HALF) * z);
+  let cy = Math.round((vh / 2) - (self.y + SHARK_HALF) * z);
+
+  // Apply camera limits to prevent showing borders
+  // The world is MAP_SIZE x MAP_SIZE, scaled by CAMERA_ZOOM
+  const worldWidth = MAP_SIZE * z;
+  const worldHeight = MAP_SIZE * z;
+
+  // Clamp camera so borders are never visible
+  // Camera position represents the top-left corner of the world in screen space
+  // Right edge: camera.x + worldWidth >= vw (world's right edge must be at or past screen right)
+  // Bottom edge: camera.y + worldHeight >= vh (world's bottom edge must be at or past screen bottom)
+  const minX = vw - worldWidth;  // Most negative (left) the camera can go
+  const maxX = 0;                 // Most positive (right) the camera can go
+  const minY = vh - worldHeight;  // Most negative (top) the camera can go
+  const maxY = 0;                 // Most positive (bottom) the camera can go
+
+  // Only apply limits if the world is larger than the viewport
+  if (worldWidth > vw) {
+    cx = Math.max(minX, Math.min(maxX, cx));
+  }
+  if (worldHeight > vh) {
+    cy = Math.max(minY, Math.min(maxY, cy));
+  }
+
+  camera.x = cx;
+  camera.y = cy;
 }
 
 function applyCameraTransform() {
@@ -625,6 +872,8 @@ function ensureSharkEl(id: string, username: string) {
     el = document.createElement('div');
     el.id = `p-${id}`;
     el.className = 'shark';
+    const glow = document.createElement('div');
+    glow.className = 'shark__glow';
     const img = document.createElement('div');
     img.className = 'shark__img';
     const flash = document.createElement('div');
@@ -635,6 +884,7 @@ function ensureSharkEl(id: string, username: string) {
     const hp = document.createElement('div');
     hp.className = 'shark__hp';
     hp.innerHTML = '<div class="shark__hpTrack"><div class="shark__hpFill" style="width:100%"></div></div>';
+    el.appendChild(glow);
     el.appendChild(img);
     el.appendChild(flash);
     el.appendChild(name);
@@ -702,6 +952,8 @@ function createBubbleLayerFromSeeds(seeds: Array<{ left: number; delay: number }
 function removeSharkEl(id: string) {
   const el = document.getElementById(`p-${id}`);
   el?.parentElement?.removeChild(el);
+  // Clean up death animation tracking
+  deathAnimTriggered.delete(id);
 }
 
 function render() {
@@ -714,6 +966,21 @@ function render() {
   // 3) Place and orient all sharks in world space
   for (const p of Object.values(players)) {
     const el = ensureSharkEl(p.id, p.username);
+
+    // Dead visual state - trigger death animation once
+    if (p.dead) {
+      el.classList.add('shark--dead');
+      if (!deathAnimTriggered.has(p.id)) {
+        deathAnimTriggered.add(p.id);
+        triggerDeathAnimation(p.id);
+      }
+      // Skip position/rotation updates for dead sharks - let CSS animation handle it
+      continue;
+    } else {
+      el.classList.remove('shark--dead');
+      deathAnimTriggered.delete(p.id);
+    }
+
     // Position container (translate only) so the name does not rotate/flip
     el.style.transform = `translate3d(${Math.round(p.x)}px, ${Math.round(p.y)}px, 0)`;
     // Rotate/mirror only the shark image so the label remains upright and unflipped
@@ -722,15 +989,15 @@ function render() {
     const flipX = (deg > 270 || deg < 90) ? -1 : 1; // right-side quadrants => flip
     const imgEl = el.querySelector('.shark__img') as HTMLDivElement | null;
     const flashEl = el.querySelector('.shark__flash') as HTMLDivElement | null;
+      const glowEl = el.querySelector('.shark__glow') as HTMLDivElement | null;
     if (imgEl) {
       const now = performance.now();
       const biteScale = (biteUntil.get(p.id) || 0) > now ? 1.08 : 1.0;
       const tr = `rotate(${(a + Math.PI)}rad) scaleY(${flipX}) scale(${biteScale})`;
       imgEl.style.transform = tr;
       if (flashEl) flashEl.style.transform = tr;
+        if (glowEl) glowEl.style.transform = tr;
     }
-    // Dead visual state
-    if (p.dead) el.classList.add('shark--dead'); else el.classList.remove('shark--dead');
     // Health bar update
     const hpEl = el.querySelector('.shark__hpFill') as HTMLDivElement | null;
     if (hpEl) {
@@ -760,15 +1027,28 @@ function render() {
     }
     lastHpById.set(p.id, curHp);
 
-    // Water trail: throttle and only when moving
+    // Water trail: throttle more aggressively for performance (only when moving)
     const nowMs2 = performance.now();
     const lastT = lastTrailTimeById.get(p.id) || 0;
     const prevPos = lastPosById.get(p.id);
-    if (nowMs2 - lastT > 160 && prevPos && (Math.abs(prevPos.x - p.x) + Math.abs(prevPos.y - p.y) > 2)) {
+    // Increased throttle from 160ms to 250ms for better performance
+    if (nowMs2 - lastT > 250 && prevPos && (Math.abs(prevPos.x - p.x) + Math.abs(prevPos.y - p.y) > 2)) {
       spawnTrailBubbleAt(p.x, p.y, p.angle);
       lastTrailTimeById.set(p.id, nowMs2);
     }
     lastPosById.set(p.id, { x: p.x, y: p.y });
+  }
+
+  // 3.5) Update score popup positions to follow the shark
+  for (const popup of activeScorePopupEls) {
+    const p = players[popup.playerId];
+    if (p) {
+      // Position above the shark's head with a rising animation
+      const elapsed = performance.now() - popup.startTime;
+      const riseOffset = Math.min(33, elapsed * 0.053); // 2/3 of 50px and 0.08 speed
+      popup.el.style.left = `${p.x + SHARK_HALF}px`;
+      popup.el.style.top = `${p.y - 27 - riseOffset}px`; // 2/3 of -40px
+    }
   }
 
   // 4) HUD updates for the local player
@@ -792,7 +1072,7 @@ function render() {
       // FX: score popup for local gains
       if (s > lastScoreSelf) {
         const delta = s - lastScoreSelf;
-        spawnScorePopup(self.x, self.y, delta);
+        spawnScorePopup(selfId, delta);
       }
       lastScoreSelf = s;
     }
@@ -824,10 +1104,10 @@ function render() {
     }
   }
 
-  // Minimap
+  // Minimap - optimized to update less frequently (150ms instead of 100ms)
   if (ctx) {
     const t = performance.now();
-    if (t - lastMinimapMs > 100) {
+    if (t - lastMinimapMs > 150) {
       lastMinimapMs = t;
       ctx.clearRect(0, 0, 200, 200);
       ctx.fillStyle = 'rgba(100,180,255,0.15)';
@@ -907,9 +1187,9 @@ function loop() {
   if (fpsEl) fpsEl.textContent = String(Math.round(fpsEMA));
 
   step(dt);
-  // Pixel-perfect eat checks, throttled to ~20 FPS to reduce cost
+  // Pixel-perfect eat checks, throttled to ~15 FPS for better performance (was 20 FPS)
   const t = performance.now();
-  if (t - lastEatCheckMs > 50) { lastEatCheckMs = t; checkEatCollisions(); }
+  if (t - lastEatCheckMs > 66) { lastEatCheckMs = t; checkEatCollisions(); }
   render();
   requestAnimationFrame(loop);
 }
@@ -962,9 +1242,41 @@ function bindGameInteractions(container: HTMLElement) {
     const key = e.key;
     if (key === ' ' || key === 'Spacebar') { e.preventDefault(); stopHoldFire(); }
   });
+
+  // Prevent zoom shortcuts (FOV hack prevention)
+  window.addEventListener('keydown', (e: KeyboardEvent) => {
+    // Prevent Cmd/Ctrl + Plus/Minus/0 (zoom shortcuts)
+    if ((e.metaKey || e.ctrlKey) && (e.key === '+' || e.key === '-' || e.key === '=' || e.key === '0')) {
+      e.preventDefault();
+      return false;
+    }
+  }, { passive: false });
+
+  // Prevent mouse wheel zoom
+  window.addEventListener('wheel', (e: WheelEvent) => {
+    if (!gameEl || gameEl.classList.contains('hidden')) return;
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      return false;
+    }
+  }, { passive: false });
+
+  // Prevent pinch zoom on trackpad
+  window.addEventListener('gesturestart', (e: Event) => {
+    e.preventDefault();
+  }, { passive: false });
+
+  window.addEventListener('gesturechange', (e: Event) => {
+    e.preventDefault();
+  }, { passive: false });
+
+  window.addEventListener('gestureend', (e: Event) => {
+    e.preventDefault();
+  }, { passive: false });
 }
 
 function initSocket(username: string) {
+  myUsername = username; // Store for respawn
   socket = io('http://localhost:3002');
 
   // Projectiles + death events
@@ -992,9 +1304,32 @@ function initSocket(username: string) {
     if (deathLevelEl) deathLevelEl.textContent = String(lvl);
     deathOverlay?.classList.remove('hidden');
   });
-  socket.on('player:respawned', () => {
+  socket.on('player:respawned', (data: { x: number; y: number; hp: number }) => {
     sessionStartMs = performance.now();
     deathOverlay?.classList.add('hidden');
+
+    // Update local player state with respawn data
+    if (selfId && data) {
+      if (!players[selfId]) {
+        players[selfId] = {
+          id: selfId,
+          x: data.x,
+          y: data.y,
+          angle: 0,
+          username: myUsername,
+          score: 0,
+          hp: data.hp,
+          dead: false
+        } as Player;
+      } else {
+        players[selfId].x = data.x;
+        players[selfId].y = data.y;
+        players[selfId].hp = data.hp;
+        players[selfId].dead = false;
+        players[selfId].score = 0;
+      }
+      ensureSharkEl(selfId, players[selfId].username);
+    }
   });
 
   socket.emit('player:join', username);
@@ -1056,6 +1391,17 @@ function initSocket(username: string) {
         if ((sp as any).hp !== undefined) (existing as any).hp = (sp as any).hp as any;
         if ((sp as any).dead !== undefined) (existing as any).dead = (sp as any).dead as any;
       }
+    }
+  });
+
+  // Fish food movement updates (server-authoritative)
+  socket.on('foods:update', (arr: Array<{ id: number; x: number; y: number }>) => {
+    if (!Array.isArray(arr)) return;
+    for (const u of arr) {
+      // Update local cache
+      if (foods[u.id]) { foods[u.id].x = u.x; foods[u.id].y = u.y; } else { foods[u.id] = { id: u.id, x: u.x, y: u.y } as any; }
+      // Ensure element exists and update its position
+      ensureFoodEl({ id: u.id, x: u.x, y: u.y } as any);
     }
   });
 
@@ -1145,11 +1491,66 @@ function startGame(username: string) {
   socket.on('bubbles:init', (seeds: Array<{ left: number; delay: number }>) => {
     createBubbleLayerFromSeeds(seeds);
   });
+
+  // Kill feed & notifications
+  socket.on('feed:kill', (payload: any) => { try { addKillFeedItem(payload); } catch {} });
+  socket.on('notify', (msg: { type: string; text: string; ttlMs?: number }) => { if (msg && msg.text) showTopNotice(msg.text, Math.max(1000, Math.min(10000, msg.ttlMs || 5000))); });
+
   if (pingTimer) clearInterval(pingTimer);
   pingTimer = window.setInterval(() => { try { socket?.emit('client:ping', performance.now()); } catch {} }, 2000);
 
   // Camera centering is handled each frame in render(); ticker removed for performance
   requestAnimationFrame(loop);
+}
+
+function addKillFeedItem(payload: any) {
+  if (!payload) return;
+  const el = document.getElementById('kill-feed') as HTMLDivElement | null;
+  if (!el) return;
+  const item = document.createElement('div');
+  item.className = 'feed-item';
+  const v = payload.victim?.username || 'Unknown';
+  const k = payload.killer?.username || 'Unknown';
+  const a = payload.assister?.username || '';
+  let html = '';
+  if (payload.mode === 'assist' && a) {
+    html = `<span class="who">${escapeHtml(a)}</span> <span class="assist">assisted</span> <span class="who">${escapeHtml(k)}</span> <span class="what">in killing</span> <span class="who">${escapeHtml(v)}</span>`;
+  } else if (payload.mode === 'shared' && a) {
+    html = `<span class="who">${escapeHtml(k)}</span> <span class="what">and</span> <span class="who">${escapeHtml(a)}</span> <span class="what">eliminated</span> <span class="who">${escapeHtml(v)}</span>`;
+  } else {
+    html = `<span class="who">${escapeHtml(k)}</span> <span class="what">killed</span> <span class="who">${escapeHtml(v)}</span>`;
+  }
+  item.innerHTML = html;
+  el.prepend(item);
+
+  // Only remove oldest item when feed overflows (max 6 items)
+  // No auto-delete timeout - items stay until pushed out by new kills
+  if (el.children.length > 6) {
+    const oldest = el.lastElementChild;
+    if (oldest) {
+      oldest.classList.add('feed-item--removing');
+      oldest.animate([
+        { opacity: 1, transform: 'translateX(0)' },
+        { opacity: 0, transform: 'translateX(20px)' }
+      ], { duration: 200, easing: 'ease-out' }).onfinish = () => {
+        oldest.remove();
+      };
+    }
+  }
+}
+
+function showTopNotice(text: string, ttlMs = 5000) {
+  const el = document.getElementById('top-notify') as HTMLDivElement | null;
+  if (!el) return;
+  const n = document.createElement('div');
+  n.className = 'notice';
+  n.textContent = text;
+  el.appendChild(n);
+  setTimeout(() => { n.style.animation = 'notifyOut .18s ease forwards'; setTimeout(() => n.remove(), 200); }, ttlMs);
+}
+
+function escapeHtml(s: string): string {
+  return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' } as any)[c] || c);
 }
 
 function main() {
@@ -1176,7 +1577,15 @@ function main() {
   deathLevelEl = document.getElementById('death-level') as HTMLElement;
 
   if (btnRespawn) {
-    btnRespawn.onclick = () => { socket?.emit('player:respawn'); };
+    btnRespawn.onclick = () => {
+      console.log('Respawn button clicked, socket:', socket);
+      if (socket) {
+        socket.emit('player:respawn');
+        console.log('Emitted player:respawn');
+      } else {
+        console.error('Socket is null, cannot respawn');
+      }
+    };
   }
   if (btnHome) {
     btnHome.onclick = () => {
@@ -1227,9 +1636,20 @@ function main() {
 
   modalReset = document.getElementById('modal-reset') as HTMLDivElement;
   rpPass = document.getElementById('rp-password') as HTMLInputElement;
+  rpConfirm = document.getElementById('rp-confirm') as HTMLInputElement;
   rpErrors = document.getElementById('rp-errors') as HTMLElement;
   rpCancel = document.getElementById('rp-cancel') as HTMLButtonElement;
   rpSubmit = document.getElementById('rp-submit') as HTMLButtonElement;
+
+  modalProfile = document.getElementById('modal-profile') as HTMLDivElement;
+  profileClose = document.getElementById('profile-close') as HTMLButtonElement;
+  menuProfile = document.getElementById('menu-profile') as HTMLButtonElement;
+
+  // Password strength indicators
+  suStrengthFill = document.getElementById('su-strength-fill') as HTMLElement;
+  suStrengthText = document.getElementById('su-strength-text') as HTMLElement;
+  rpStrengthFill = document.getElementById('rp-strength-fill') as HTMLElement;
+  rpStrengthText = document.getElementById('rp-strength-text') as HTMLElement;
 
   const input = document.getElementById('username') as HTMLInputElement;
   const play = document.getElementById('play') as HTMLButtonElement;
@@ -1238,9 +1658,19 @@ function main() {
   btnLogin.addEventListener('click', () => { liErrors.textContent = ''; openModal(modalLogin); liUser.focus(); });
   btnSignup.addEventListener('click', () => { suErrors.textContent = ''; openModal(modalSignup); suUser.focus(); });
 
+  // Password strength listeners
+  suPass.addEventListener('input', () => {
+    updatePasswordStrength(suPass.value, suStrengthFill, suStrengthText);
+  });
+
+  rpPass.addEventListener('input', () => {
+    updatePasswordStrength(rpPass.value, rpStrengthFill, rpStrengthText);
+  });
+
   suCancel.addEventListener('click', () => closeModal(modalSignup));
   liCancel.addEventListener('click', () => closeModal(modalLogin));
   rpCancel.addEventListener('click', () => closeModal(modalReset));
+  profileClose.addEventListener('click', () => closeModal(modalProfile));
 
   suSubmit.addEventListener('click', async () => {
     suErrors.textContent = '';
@@ -1257,10 +1687,24 @@ function main() {
     liErrors.textContent = '';
     const u = (liUser.value || '').trim().slice(0, 16);
     const p = liPass.value || '';
-    const r = await login(u, p);
-    if (!r.ok) { liErrors.textContent = r.error || 'Login failed'; return; }
-    setSession(r.data!);
+
+    // Show loading overlay
     closeModal(modalLogin);
+    showLoading('Logging in...');
+
+    // Small delay for visual feedback
+    await new Promise(resolve => setTimeout(resolve, 800));
+
+    const r = await login(u, p);
+    hideLoading();
+
+    if (!r.ok) {
+      openModal(modalLogin);
+      liErrors.textContent = r.error || 'Login failed';
+      return;
+    }
+
+    setSession(r.data!);
     setUIFromSession();
   });
 
@@ -1284,27 +1728,87 @@ function main() {
       accountChip.setAttribute('aria-expanded', 'false');
     }
   });
-  menuLogout.addEventListener('click', () => {
+  menuProfile.addEventListener('click', () => {
+    accountMenu.classList.add('hidden');
+    accountChip.setAttribute('aria-expanded', 'false');
+
+    // Populate profile data
+    const session = getSession();
+    if (session) {
+      const profileGames = document.getElementById('profile-games') as HTMLElement;
+      const profileScore = document.getElementById('profile-score') as HTMLElement;
+      const profileDate = document.getElementById('profile-date') as HTMLElement;
+
+      // For now, show placeholder data - in a real app, this would come from the server
+      profileGames.textContent = '0';
+      profileScore.textContent = '0';
+
+      // Format the date
+      const date = new Date(session.timeCreated);
+      profileDate.textContent = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+
+    openModal(modalProfile);
+  });
+
+  menuLogout.addEventListener('click', async () => {
+    accountMenu.classList.add('hidden');
+    accountChip.setAttribute('aria-expanded', 'false');
+
+    // Show loading overlay
+    showLoading('Logging out...');
+
+    // Small delay for visual feedback
+    await new Promise(resolve => setTimeout(resolve, 600));
+
     clearSession();
     const input = document.getElementById('username') as HTMLInputElement | null;
     if (input) input.value = '';
-    accountMenu.classList.add('hidden');
-    accountChip.setAttribute('aria-expanded', 'false');
+
+    hideLoading();
     setUIFromSession();
   });
-  menuReset.addEventListener('click', () => { rpErrors.textContent=''; rpPass.value=''; openModal(modalReset); rpPass.focus(); });
+
+  menuReset.addEventListener('click', () => {
+    accountMenu.classList.add('hidden');
+    accountChip.setAttribute('aria-expanded', 'false');
+    rpErrors.textContent='';
+    rpPass.value='';
+    rpConfirm.value='';
+    updatePasswordStrength('', rpStrengthFill, rpStrengthText);
+    openModal(modalReset);
+    rpPass.focus();
+  });
+
   rpSubmit.addEventListener('click', async () => {
+    rpErrors.textContent = '';
     const np = rpPass.value || '';
+    const confirm = rpConfirm.value || '';
+
+    // Validate passwords match
+    if (np !== confirm) {
+      rpErrors.textContent = 'Passwords do not match';
+      return;
+    }
+
     const r = await resetPassword(np);
     if (!r.ok) { rpErrors.textContent = r.error || 'Failed to update password'; return; }
     closeModal(modalReset);
   });
 
-  play.addEventListener('click', () => {
+  play.addEventListener('click', async () => {
     const s = getSession();
-    if (s) { startGame(s.username); return; }
-    const name = (input.value || '').trim().slice(0, 16);
+    const name = s ? s.username : (input.value || '').trim().slice(0, 16);
     if (!name) { openModal(modalSignup); return; }
+
+    // Show connecting overlay
+    showLoading('Connecting to server...');
+
+    // Small delay for visual feedback
+    await new Promise(resolve => setTimeout(resolve, 800));
+
+    // Hide loading and start game
+    hideLoading();
     startGame(name);
   });
 

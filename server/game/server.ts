@@ -14,7 +14,7 @@ interface Player {
     dead: boolean;   // death state
 }
 
-interface Food { id: number; x: number; y: number; }
+interface Food { id: number; x: number; y: number; vx?: number; vy?: number; }
 
 interface GameState {
     players: { [key: string]: Player };
@@ -23,10 +23,12 @@ interface GameState {
 
 // Map configuration
 const MAP_SIZE = 4000;
-const PLAYER_RADIUS = 128; // matches client baby shark size (256px)
+const PLAYER_RADIUS = Math.round(128 * (2/3)); // matches client baby shark size (2/3 of 256px = ~171px)
 // Collision mask configuration
-const SHARK_SIZE = 256; // baby shark sprite size (px)
+const SHARK_MASK_SIZE = 256; // Original mask size (masks are still 256x256)
+const SHARK_SIZE = Math.round(256 * (2/3)); // baby shark sprite size (2/3 of original = ~171px)
 const SHARK_HALF = SHARK_SIZE / 2;
+const SHARK_SCALE = SHARK_SIZE / SHARK_MASK_SIZE; // Scale factor (2/3)
 const FOOD_SIZE = Math.round(50 * 0.75); // must match client FISHFOOD_SIZE (~38)
 const FOOD_HALF = Math.floor(FOOD_SIZE / 2);
 
@@ -53,8 +55,9 @@ const BUBBLE_SPEED = 900;        // px/s, fast and consistent
 const BUBBLE_TTL_MS = 1000;      // lifespan 1.0 seconds (auto fade after removal on client)
 const SHOOT_COOLDOWN_MS = 500;   // 0.5 seconds per player (reload)
 // Mouth offset relative to shark center (rotate by angle + 180deg)
-let MOUTH_OFFSET_X = 26 - SHARK_HALF;  // fallback if mask not available
-let MOUTH_OFFSET_Y = 150 - SHARK_HALF;
+// Note: These are in mask space (256x256), will be scaled to render space when used
+let MOUTH_OFFSET_X = 26 - (SHARK_MASK_SIZE / 2);  // fallback if mask not available
+let MOUTH_OFFSET_Y = 150 - (SHARK_MASK_SIZE / 2);
 
 function computeMouthAnchorFromMask(mask: Uint8Array, size: number): { x: number; y: number } {
   // Find leftmost opaque edge across rows; pick median row among those near the global minX (within 2px)
@@ -89,6 +92,12 @@ const usernames = new Map<string, string>();
 // Parsed alpha masks (1=opaque, 0=transparent)
 let sharkMask: Uint8Array | null = null; // length SHARK_SIZE*SHARK_SIZE
 let foodMask: Uint8Array | null = null;  // length FOOD_SIZE*FOOD_SIZE
+
+// Combat bookkeeping for assists and kill awards
+const ASSIST_WINDOW_MS = 20_000; // 20 seconds
+const BULLET_DAMAGE = 5; // keep in sync with client HP logic
+// victimId -> (attackerId -> { dmg, last })
+const damageByVictim = new Map<string, Map<string, { dmg: number; last: number }>>();
 
 // Level progression (XP to go from level L to L+1), zero-based index (0 => 1->2)
 let LEVEL_STEPS: number[] = [];
@@ -137,12 +146,13 @@ async function loadLevelProgression(): Promise<void> {
 async function loadServerMasks(): Promise<void> {
   try {
     const sharkTxt = await fsp.readFile('server/sharks/baby shark.txt', 'utf8');
-    const rawShark = parseBinaryMask(sharkTxt, SHARK_SIZE, SHARK_SIZE);
+    const rawShark = parseBinaryMask(sharkTxt, SHARK_MASK_SIZE, SHARK_MASK_SIZE);
     sharkMask = rawShark;
     try {
-      const mouth = computeMouthAnchorFromMask(sharkMask, SHARK_SIZE);
-      MOUTH_OFFSET_X = mouth.x - SHARK_HALF;
-      MOUTH_OFFSET_Y = mouth.y - SHARK_HALF;
+      const mouth = computeMouthAnchorFromMask(sharkMask, SHARK_MASK_SIZE);
+      // Mouth is in mask space, keep it there (will scale when using)
+      MOUTH_OFFSET_X = mouth.x - (SHARK_MASK_SIZE / 2);
+      MOUTH_OFFSET_Y = mouth.y - (SHARK_MASK_SIZE / 2);
     } catch {}
 
   } catch (e) {
@@ -185,17 +195,19 @@ function pixelPerfectOverlap(me: Player, food: Food): boolean {
       // rotate into shark-local (-rot) and apply flipY to match CSS scaleY on client
       const lx = vx * cos + vy * sin;
       const ly = (-vx * sin + vy * cos) * flipY;
-      const sx = Math.round(lx + SHARK_HALF);
-      const sy = Math.round(ly + SHARK_HALF);
-      if (sx < 0 || sy < 0 || sx >= SHARK_SIZE || sy >= SHARK_SIZE) continue;
-      const idx = sy * SHARK_SIZE + sx;
+      // Scale to mask space (mask is 256x256, shark renders at 171x171)
+      const sx = Math.round((lx / SHARK_SCALE) + (SHARK_MASK_SIZE / 2));
+      const sy = Math.round((ly / SHARK_SCALE) + (SHARK_MASK_SIZE / 2));
+      if (sx < 0 || sy < 0 || sx >= SHARK_MASK_SIZE || sy >= SHARK_MASK_SIZE) continue;
+      const idx = sy * SHARK_MASK_SIZE + sx;
       if (sharkMask[idx] !== 0) return true;
-      // Tiny cross kernel for robustness around rotation/rounding
-      const offs = [[1,0],[-1,0],[0,1],[0,-1]] as const;
-      for (const [ox, oy] of offs) {
-        const x = sx + ox, y = sy + oy;
-        if (x < 0 || y < 0 || x >= SHARK_SIZE || y >= SHARK_SIZE) continue;
-        if (sharkMask[y * SHARK_SIZE + x] !== 0) return true;
+      // 5x5 kernel for better collision detection with scaled sprites
+      for (let oy = -2; oy <= 2; oy++) {
+        for (let ox = -2; ox <= 2; ox++) {
+          const x = sx + ox, y = sy + oy;
+          if (x < 0 || y < 0 || x >= SHARK_MASK_SIZE || y >= SHARK_MASK_SIZE) continue;
+          if (sharkMask[y * SHARK_MASK_SIZE + x] !== 0) return true;
+        }
       }
     }
   }
@@ -252,7 +264,9 @@ function spawnFoodDistributed(tries = 20): Food {
         const score = nearestDistSq(cx, cy);
         if (!best || score > best.score) best = { x: cx, y: cy, score };
     }
-    const food: Food = { id: nextFoodId++, x: best!.x, y: best!.y };
+    const ang = Math.random() * Math.PI * 2;
+    const speed = rand(8, 18); // px/s, gentle drift
+    const food: Food = { id: nextFoodId++, x: best!.x, y: best!.y, vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed };
     gameState.foods[food.id] = food;
     return food;
 }
@@ -262,8 +276,8 @@ function bubbleHitsShark(p: Player, bx: number, by: number): boolean {
   // Coarse prune by radius to avoid heavy math when far
   const cx = p.x + PLAYER_RADIUS, cy = p.y + PLAYER_RADIUS;
   const dx = bx - cx, dy = by - cy;
-  const maxR = PLAYER_RADIUS + 2; // small slack
-  if ((dx*dx + dy*dy) > (maxR*maxR)) return false;
+  const maxR = PLAYER_RADIUS + 8; // increased slack for better edge detection
+  if ((dx * dx + dy * dy) > (maxR * maxR)) return false;
 
   // Inverse of the visual transform applied on client: rotate(a+PI) then flipY based on quadrant
   const a = p.angle;
@@ -276,20 +290,141 @@ function bubbleHitsShark(p: Player, bx: number, by: number): boolean {
   const ry = s * dx + c * dy;
   const lx = rx;
   const ly = ry * flipY;
-  // Map to mask pixel coordinates
-  const ux = Math.round(lx + SHARK_HALF);
-  const uy = Math.round(ly + SHARK_HALF);
-  if (ux < 0 || uy < 0 || ux >= SHARK_SIZE || uy >= SHARK_SIZE) return false;
-  const idx = uy * SHARK_SIZE + ux;
+  // Map to mask pixel coordinates (scale to mask space)
+  const ux = Math.round((lx / SHARK_SCALE) + (SHARK_MASK_SIZE / 2));
+  const uy = Math.round((ly / SHARK_SCALE) + (SHARK_MASK_SIZE / 2));
+  if (ux < 0 || uy < 0 || ux >= SHARK_MASK_SIZE || uy >= SHARK_MASK_SIZE) return false;
+  const idx = uy * SHARK_MASK_SIZE + ux;
   if (sharkMask[idx] !== 0) return true;
-  // Sample a tiny cross kernel for robustness
-  const offs = [[1,0],[-1,0],[0,1],[0,-1]] as const;
-  for (const [ox, oy] of offs) {
-    const x = ux + ox, y = uy + oy;
-    if (x < 0 || y < 0 || x >= SHARK_SIZE || y >= SHARK_SIZE) continue;
-    if (sharkMask[y * SHARK_SIZE + x] !== 0) return true;
+
+  // Enhanced 7x7 kernel for better collision detection with scaled sprites and moving bullets
+  // This ensures we catch bullets that hit any colored pixel of the shark
+  for (let oy = -3; oy <= 3; oy++) {
+    for (let ox = -3; ox <= 3; ox++) {
+      const x = ux + ox, y = uy + oy;
+      if (x < 0 || y < 0 || x >= SHARK_MASK_SIZE || y >= SHARK_MASK_SIZE) continue;
+      if (sharkMask[y * SHARK_MASK_SIZE + x] !== 0) return true;
+    }
   }
+
+  // Additional sub-pixel sampling for fast-moving bullets
+  // Sample 4 points around the bullet center for better accuracy
+  const offsets = [
+    { dx: -1, dy: -1 }, { dx: 1, dy: -1 },
+    { dx: -1, dy: 1 }, { dx: 1, dy: 1 }
+  ];
+
+  for (const offset of offsets) {
+    const sx = ux + offset.dx;
+    const sy = uy + offset.dy;
+    if (sx < 0 || sy < 0 || sx >= SHARK_MASK_SIZE || sy >= SHARK_MASK_SIZE) continue;
+    if (sharkMask[sy * SHARK_MASK_SIZE + sx] !== 0) return true;
+  }
+
   return false;
+}
+
+// --- Damage tracking and kill/assist awarding ---
+function recordDamage(victimId: string, attackerId: string, amount: number, now: number) {
+  if (!victimId || !attackerId) return;
+  let m = damageByVictim.get(victimId);
+  if (!m) { m = new Map(); damageByVictim.set(victimId, m); }
+  const cur = m.get(attackerId) || { dmg: 0, last: 0 };
+  cur.dmg += amount;
+  cur.last = now;
+  m.set(attackerId, cur);
+}
+
+function handleDeathAndAwards(victim: Player, killerId: string, now: number) {
+  const victimScore = Math.max(0, victim.score | 0);
+  const victimId = victim.id;
+  const contrib = damageByVictim.get(victimId) || new Map<string, { dmg: number; last: number }>();
+  // Consider only those who damaged within the assist window
+  const recent: Array<{ id: string; dmg: number; last: number }> = [];
+  for (const [aid, rec] of contrib.entries()) {
+    if (now - rec.last <= ASSIST_WINDOW_MS) recent.push({ id: aid, dmg: rec.dmg, last: rec.last });
+  }
+  // Ensure killer is present in the set
+  if (!recent.find(r => r.id === killerId)) recent.push({ id: killerId, dmg: 0, last: now });
+  // Sort by damage descending
+  recent.sort((a, b) => b.dmg - a.dmg);
+
+  let mode: 'solo' | 'assist' | 'shared' = 'solo';
+  let majority: { id: string; dmg: number } | null = null;
+  let minority: { id: string; dmg: number } | null = null;
+  if (recent.length >= 2) {
+    const a = recent[0];
+    const b = recent[1];
+    // Tie: both around 50% of max HP (100)
+    if (a.dmg >= 50 && b.dmg >= 50 && Math.abs(a.dmg - b.dmg) < 0.001) {
+      mode = 'shared';
+      majority = { id: a.id, dmg: a.dmg };
+      minority = { id: b.id, dmg: b.dmg };
+    } else if (b.dmg >= 35) { // Assist threshold: at least 35 damage within window
+      mode = 'assist';
+      majority = { id: a.id, dmg: a.dmg };
+      minority = { id: b.id, dmg: b.dmg };
+    }
+  }
+
+  // Compute awards
+  let killerGain = 0, assistGain = 0;
+  let assisterId: string | null = null;
+  if (mode === 'solo') {
+    killerGain = Math.floor(victimScore / 2);
+  } else if (mode === 'shared' && majority && minority) {
+    // 50/50 share of the 1/2 pool => each gets 1/4 victim score
+    killerGain = Math.floor(victimScore / 4);
+    assistGain = Math.floor(victimScore / 4);
+    assisterId = minority.id === killerId ? majority.id : minority.id; // pick the other as assister for messaging
+  } else if (mode === 'assist' && majority && minority) {
+    // Majority gets 2/6, minority gets 1/6 (total 1/2 victim score)
+    const majGain = Math.floor(victimScore * 2 / 6);
+    const minGain = Math.floor(victimScore * 1 / 6);
+    if (killerId === majority.id) {
+      killerGain = majGain; assistGain = minGain; assisterId = minority.id;
+    } else if (killerId === minority.id) {
+      killerGain = minGain; assistGain = majGain; assisterId = majority.id;
+    } else {
+      // Edge case: killer not among top two (unlikely). Treat as solo kill.
+      killerGain = Math.floor(victimScore / 2);
+      mode = 'solo';
+    }
+  }
+
+  // Apply gains
+  const killer = gameState.players[killerId];
+  if (killer && killerGain > 0) { killer.score = (killer.score || 0) + killerGain; }
+  if (assisterId) {
+    const assister = gameState.players[assisterId];
+    if (assister && assistGain > 0) assister.score = (assister.score || 0) + assistGain;
+  }
+
+  // Emit kill feed + personal notifications
+  const payload: any = {
+    mode,
+    victim: { id: victim.id, username: victim.username, score: victimScore },
+  };
+  if (killer) payload.killer = { id: killer.id, username: killer.username, gain: killerGain };
+  if (assisterId) {
+    const assister = gameState.players[assisterId];
+    if (assister) payload.assister = { id: assister.id, username: assister.username, gain: assistGain };
+  }
+  io.emit('feed:kill', payload);
+
+  // Local top notifications (5s)
+  const killerSock = io.sockets.sockets.get(killerId);
+  if (killerSock) killerSock.emit('notify', { type: 'kill', text: `You killed ${victim.username}`, ttlMs: 5000 });
+  if (assisterId) {
+    const assister = gameState.players[assisterId];
+    const asSock = io.sockets.sockets.get(assisterId);
+    if (assister && asSock && killer) {
+      asSock.emit('notify', { type: 'assist', text: `You assisted ${killer.username} in killing ${victim.username}`, ttlMs: 5000 });
+    }
+  }
+
+  // Cleanup damage logs for this victim
+  damageByVictim.delete(victimId);
 }
 
 
@@ -307,18 +442,55 @@ ensureFoodPopulation();
 // Track whether the state changed since last tick to avoid redundant broadcasts
 let dirty = false;
 
+let foodsEmitAccum = 0;
+const FOODS_EMIT_MS = 100; // emit foods at ~10 Hz to reduce bandwidth
+
+// Gentle wandering movement for fish food (server-authoritative)
+function updateFoods(dt: number): Array<{ id: number; x: number; y: number }> {
+  const updates: Array<{ id: number; x: number; y: number }> = [];
+  for (const f of Object.values(gameState.foods) as Food[]) {
+    if (typeof f.vx !== 'number' || typeof f.vy !== 'number') {
+      const ang = Math.random() * Math.PI * 2;
+      const sp = rand(8, 18);
+      f.vx = Math.cos(ang) * sp;
+      f.vy = Math.sin(ang) * sp;
+    } else {
+      const steer = 4; // px/s^2 random steering
+      f.vx += (Math.random() - 0.5) * steer * dt;
+      f.vy += (Math.random() - 0.5) * steer * dt;
+      const max = 20; // cap speed
+      const s = Math.hypot(f.vx, f.vy) || 1;
+      if (s > max) { f.vx = f.vx / s * max; f.vy = f.vy / s * max; }
+    }
+    f.x += (f.vx || 0) * dt;
+    f.y += (f.vy || 0) * dt;
+    // Bounce inside map bounds (keep half-size margin)
+    if (f.x < FOOD_HALF) { f.x = FOOD_HALF; if (typeof f.vx === 'number') f.vx = Math.abs(f.vx); }
+    if (f.y < FOOD_HALF) { f.y = FOOD_HALF; if (typeof f.vy === 'number') f.vy = Math.abs(f.vy); }
+    if (f.x > MAP_SIZE - FOOD_HALF) { f.x = MAP_SIZE - FOOD_HALF; if (typeof f.vx === 'number') f.vx = -Math.abs(f.vx); }
+    if (f.y > MAP_SIZE - FOOD_HALF) { f.y = MAP_SIZE - FOOD_HALF; if (typeof f.vy === 'number') f.vy = -Math.abs(f.vy); }
+    updates.push({ id: f.id, x: f.x, y: f.y });
+  }
+  return updates;
+}
+
 io.on('connection', (socket) => {
     console.log('Player connected:', socket.id);
 
     // Initialize new player
     socket.on('player:join', (username: string) => {
-        // Spawn players in the upper portion of the map (shallow water)
+        // Spawn players in the center area of the map (avoid borders for better camera view)
         usernames.set(socket.id, username);
+
+        // Center spawn area: middle 60% of the map (20% margin from each edge)
+        const spawnMargin = MAP_SIZE * 0.2;
+        const spawnWidth = MAP_SIZE - (spawnMargin * 2) - SHARK_SIZE;
+        const spawnHeight = MAP_SIZE - (spawnMargin * 2) - SHARK_SIZE;
 
         gameState.players[socket.id] = {
             id: socket.id,
-            x: Math.random() * (MAP_SIZE - SHARK_SIZE), // Spawn fully in-bounds (top-left position)
-            y: Math.random() * Math.max(0, (MAP_SIZE * 0.3 - SHARK_SIZE)), // Top 30% band, fully in-bounds
+            x: spawnMargin + Math.random() * spawnWidth,
+            y: spawnMargin + Math.random() * spawnHeight,
             angle: 0,
             username,
             score: 0,
@@ -420,14 +592,24 @@ io.on('connection', (socket) => {
         if (!me || me.dead) return;
         const now = Date.now();
         const last = lastShotAt.get(socket.id) || 0;
-        if (now - last < SHOOT_COOLDOWN_MS) return; // cooldown enforcement
+        const timeSinceLastShot = now - last;
+
+        // Add small tolerance (50ms) to account for network latency and timing drift
+        if (timeSinceLastShot < SHOOT_COOLDOWN_MS - 50) {
+            // console.log(`Shot rejected for ${socket.id}: ${timeSinceLastShot}ms < ${SHOOT_COOLDOWN_MS}ms`);
+            return; // cooldown enforcement
+        }
+
         lastShotAt.set(socket.id, now);
         // Spawn bubble at mouth offset rotated by (angle + 180deg)
+        // Note: MOUTH_OFFSET is in mask space, scale to render space
         const rot = me.angle + Math.PI;
         const cos = Math.cos(rot), sin = Math.sin(rot);
         const cx = me.x + PLAYER_RADIUS, cy = me.y + PLAYER_RADIUS;
-        const sx = cx + (MOUTH_OFFSET_X * cos + MOUTH_OFFSET_Y * -sin);
-        const sy = cy + (MOUTH_OFFSET_X * sin + MOUTH_OFFSET_Y * cos);
+        const mouthX = MOUTH_OFFSET_X * SHARK_SCALE; // Scale from mask to render space
+        const mouthY = MOUTH_OFFSET_Y * SHARK_SCALE;
+        const sx = cx + (mouthX * cos + mouthY * -sin);
+        const sy = cy + (mouthX * sin + mouthY * cos);
         const dx = (tx - sx), dy = (ty - sy);
         const inv = 1 / (Math.hypot(dx, dy) || 1);
         const vx = dx * inv * BUBBLE_SPEED;
@@ -438,13 +620,28 @@ io.on('connection', (socket) => {
 
     // Player respawn request (after death)
     socket.on('player:respawn', () => {
+        console.log(`Respawn request from ${socket.id}`);
         let me = gameState.players[socket.id];
-        if (me) return; // already alive
+        console.log(`Player state:`, me ? `exists, dead=${me.dead}` : 'does not exist');
+
+        // Only prevent respawn if player exists AND is alive (not dead)
+        if (me && !me.dead) {
+            console.log(`Player ${socket.id} is already alive, ignoring respawn`);
+            return; // already alive
+        }
+
         const username = usernames.get(socket.id) || 'Player';
+        console.log(`Respawning player ${username} (${socket.id})`);
+
+        // Center spawn area: middle 60% of the map (20% margin from each edge)
+        const spawnMargin = MAP_SIZE * 0.2;
+        const spawnWidth = MAP_SIZE - (spawnMargin * 2) - SHARK_SIZE;
+        const spawnHeight = MAP_SIZE - (spawnMargin * 2) - SHARK_SIZE;
+
         me = gameState.players[socket.id] = {
             id: socket.id,
-            x: Math.random() * (MAP_SIZE - SHARK_SIZE),
-            y: Math.random() * Math.max(0, (MAP_SIZE * 0.3 - SHARK_SIZE)),
+            x: spawnMargin + Math.random() * spawnWidth,
+            y: spawnMargin + Math.random() * spawnHeight,
             angle: 0,
             username,
             score: 0,
@@ -454,6 +651,8 @@ io.on('connection', (socket) => {
         lastUpdate.set(socket.id, Date.now());
         lastPos.set(socket.id, { x: me.x, y: me.y });
         lastShotAt.set(socket.id, 0);
+
+        console.log(`Emitting player:respawned to ${socket.id} at (${me.x}, ${me.y})`);
         socket.emit('player:respawned', { x: me.x, y: me.y, hp: me.hp });
         socket.broadcast.emit('player:new', me);
         dirty = true;
@@ -487,40 +686,76 @@ setInterval(() => {
         const b = bubbles[id];
         if (!b) continue;
         if (now >= b.expireAt) { delete bubbles[id]; projDirty = true; continue; }
-        b.x += b.vx * dt;
-        b.y += b.vy * dt;
-        // Despawn if hit map boundaries
-        if (b.x < 0 || b.y < 0 || b.x > MAP_SIZE || b.y > MAP_SIZE) { delete bubbles[id]; projDirty = true; continue; }
-        // Collision with players (exclude owner and dead targets)
+
+        // Calculate new position
+        const newX = b.x + b.vx * dt;
+        const newY = b.y + b.vy * dt;
+
+        // Check map boundaries before moving
+        if (newX < 0 || newY < 0 || newX > MAP_SIZE || newY > MAP_SIZE) {
+            delete bubbles[id];
+            projDirty = true;
+            continue;
+        }
+
+        // Enhanced collision detection: check along the bullet's path to prevent tunneling
+        // Sample multiple points between old and new position for fast-moving bullets
         let hit = false;
-        for (const p of Object.values(gameState.players)) {
-            if (!p || p.id === b.ownerId || p.dead) continue;
-            if (bubbleHitsShark(p, b.x, b.y)) {
-                // Deal damage and despawn
-                p.hp = Math.max(0, (p.hp ?? 100) - 5);
-                if (p.hp <= 0) {
-                    const dyingId = p.id;
-                    const s = io.sockets.sockets.get(dyingId);
-                    s?.emit('player:died');
-                    // Remove this player's active bubbles and cooldown/state
-                    for (const bid of Object.keys(bubbles)) {
-                        if (bubbles[Number(bid)]?.ownerId === dyingId) { delete bubbles[Number(bid)]; projDirty = true; }
+        const steps = 3; // Check 3 intermediate points along the path
+        for (let step = 0; step <= steps && !hit; step++) {
+            const t = step / steps;
+            const checkX = b.x + (newX - b.x) * t;
+            const checkY = b.y + (newY - b.y) * t;
+
+            for (const p of Object.values(gameState.players)) {
+                if (!p || p.id === b.ownerId || p.dead) continue;
+                if (bubbleHitsShark(p, checkX, checkY)) {
+                    // Deal damage
+                    recordDamage(p.id, b.ownerId, BULLET_DAMAGE, now);
+                    p.hp = Math.max(0, (p.hp ?? 100) - BULLET_DAMAGE);
+
+                    // ALWAYS delete the bullet on contact, even if it's the killing blow
+                    // DO NOT update position - delete immediately so client never sees it at collision point
+                    delete bubbles[id];
+                    projDirty = true;
+                    dirty = true; // player state changed
+                    hit = true;
+
+                    // Handle death
+                    if (p.hp <= 0) {
+                        const dyingId = p.id;
+                        const s = io.sockets.sockets.get(dyingId);
+                        s?.emit('player:died');
+
+                        // Mark player as dead but keep in game state for animation
+                        p.dead = true;
+
+                        // Award kill/assists
+                        try { handleDeathAndAwards(p, b.ownerId, now); } catch {}
+
+                        // Remove this player's active bubbles and cooldown/state
+                        for (const bid of Object.keys(bubbles)) {
+                            if (bubbles[Number(bid)]?.ownerId === dyingId) { delete bubbles[Number(bid)]; projDirty = true; }
+                        }
+                        lastShotAt.delete(dyingId);
+                        lastUpdate.delete(dyingId);
+                        lastPos.delete(dyingId);
+
+                        // Remove player from game state after death animation completes (1.2s)
+                        setTimeout(() => {
+                            delete gameState.players[dyingId];
+                            io.emit('player:left', dyingId);
+                        }, 1200);
                     }
-                    lastShotAt.delete(dyingId);
-                    lastUpdate.delete(dyingId);
-                    lastPos.delete(dyingId);
-                    delete gameState.players[dyingId];
-                    dirty = true;
-                    io.emit('player:left', dyingId);
+                    break;
                 }
-                delete bubbles[id];
-                projDirty = true;
-                dirty = true; // player state changed
-                hit = true;
-                break;
             }
         }
+
+        // Only update position and send to clients if no collision
         if (!hit && bubbles[id]) {
+            b.x = newX;
+            b.y = newY;
             updates.push({ id, x: b.x, y: b.y });
         }
     }
@@ -529,6 +764,14 @@ setInterval(() => {
     if (updates.length > 0 || projDirty) {
       io.volatile.compress(false).emit('projectiles:update', updates);
       projDirty = false;
+    }
+
+    // Update fish food wander and emit positions at a modest cadence
+    const foodUpdates = updateFoods(dt);
+    foodsEmitAccum += TICK_MS;
+    if (foodsEmitAccum >= FOODS_EMIT_MS && foodUpdates.length) {
+      io.volatile.compress(false).emit('foods:update', foodUpdates);
+      foodsEmitAccum = 0;
     }
 
     // Players broadcast if state changed

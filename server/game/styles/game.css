@@ -1,0 +1,910 @@
+/* ========================================
+   JAWZ.IO - SERVER-SIDE GAME STYLES
+   All game-related rendering, effects, and HUD
+   ======================================== */
+
+/* CSS Variables used by game styles (inherited from client but defined here for clarity) */
+:root {
+  /* UI elements */
+  --border: rgba(255,255,255,0.16);
+  --shadow: 0 12px 40px rgba(0,0,0,0.35);
+
+  /* Primary colors */
+  --primary: #00d4ff;
+  --neon-cyan: #00ffff;
+  --neon-blue: #0080ff;
+  --neon-purple: #a78bfa;
+
+  /* Text colors */
+  --fg: #e8f6ff;
+  --muted: #9bc7e6;
+
+  /* Transitions */
+  --transition-slow: 350ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Prevent zoom on all game elements */
+.game, .game * {
+  touch-action: pan-x pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Prevent zoom/scale on game container */
+.game {
+  transform-origin: center center;
+  zoom: 1;
+  -moz-transform: scale(1);
+  -webkit-transform: scale(1);
+  transform: scale(1);
+}
+
+/* Bubbles layer */
+#bubble-layer { position: fixed; inset: 0; pointer-events: none; z-index: 2; }
+/* Use PNG image for bubbles instead of CSS gradients */
+.bubble { position: absolute; display: block; object-fit: contain; image-rendering: crisp-edges; image-rendering: pixelated; will-change: transform, opacity; filter: drop-shadow(0 1px 4px rgba(0,0,0,.22)); animation: bubble 14s linear infinite; }
+@keyframes bubble {
+  0%   { transform: translate3d(0, 100vh, 0); opacity: 0; }
+  12%  { opacity: .9; }
+  50%  { transform: translate3d(-12px, 20vh, 0); opacity: .96; }
+  75%  { transform: translate3d(10px, -2vh, 0); opacity: .9; }
+  100% { transform: translate3d(0, -12vh, 0); opacity: 0; }
+}
+@keyframes sway { 0%,100%{ transform: translateX(0) } 33%{ transform: translateX(-14px) } 66%{ transform: translateX(12px) } }
+
+/* Game */
+.hidden {
+  display: none !important;
+}
+
+.game {
+  position: absolute;
+  inset: 0;
+  padding-top: 64px;
+  background: linear-gradient(180deg, #062133, #052134 60%, #041a2a);
+  opacity: 0;
+  transition: opacity var(--transition-slow);
+}
+
+.game:not(.hidden) {
+  opacity: 1;
+  animation: gameEnter 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes gameEnter {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+/* Futuristic grid overlay with subtle scan lines - optimized */
+.game::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  opacity: .12;
+  mix-blend-mode: screen;
+  background-image:
+    repeating-linear-gradient(0deg, transparent 0 2px, rgba(0,255,255,.08) 2px 3px),
+    repeating-linear-gradient(90deg, transparent 0 2px, rgba(0,255,255,.08) 2px 3px),
+    repeating-linear-gradient(112deg, rgba(255,255,255,.15) 0 2px, rgba(255,255,255,0) 2px 24px),
+    radial-gradient(120% 80% at 50% -10%, rgba(0,255,255,.12), rgba(255,255,255,0) 60%);
+  background-size: 50px 50px, 50px 50px, 100% 100%, 100% 100%;
+  /* Removed animation for better performance */
+}
+
+.world {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 4000px;
+  height: 4000px;
+  transform: none;
+  transform-origin: 0 0;
+  /* Futuristic darker ocean background with cyan tint */
+  background: linear-gradient(180deg, rgba(20,90,120,.38), rgba(15,75,110,.36) 38%, rgba(8,50,90,.32) 72%, rgba(3,25,50,.30));
+  will-change: transform;
+  overflow: hidden;
+  /* Futuristic neon border with corner accents */
+  outline: 2px solid rgba(0,255,255,0.35);
+  outline-offset: -2px;
+  /* Enhanced glow for futuristic feel */
+  box-shadow:
+    inset 0 0 40px rgba(0,255,255,0.08),
+    inset 0 0 80px rgba(0,180,255,0.04),
+    0 0 30px rgba(0,255,255,0.15);
+}
+.shark {
+  position: absolute;
+  width: 171px;  /* 2/3 of 256px */
+  height: 171px; /* 2/3 of 256px */
+  transform-origin: 85.5px 85.5px; /* 2/3 of 128px */
+  will-change: transform;
+  /* Optimized futuristic cyan glow - reduced for performance */
+  filter:
+    drop-shadow(0 5px 11px rgba(0,0,0,.6))
+    drop-shadow(0 0 15px rgba(0,255,255,0.5))
+    drop-shadow(0 0 25px rgba(0,200,255,0.25));
+  z-index: 2;
+}
+.shark__img {
+  position: absolute;
+  inset: 0;
+  background-image: url('/sharks/Baby%20Shark.png');
+  background-size: cover;
+  image-rendering: crisp-edges;
+  transition: transform 140ms cubic-bezier(.2,.8,.2,1);
+  will-change: transform;
+  /* Optimized: reduced from 4 drop-shadows to 2 for better performance while keeping glow, scaled to 2/3 */
+  filter: drop-shadow(0 0 13px rgba(90,220,255,.5)) drop-shadow(0 3px 8px rgba(0,0,0,.4));
+}
+
+/* Subtle cyan glow layer under the shark (GPU-accelerated) */
+.shark__glow {
+  position: absolute;
+  inset: 0;
+  background-image: url('/sharks/Baby%20Shark.png');
+  background-size: cover;
+  image-rendering: crisp-edges;
+  pointer-events: none;
+  will-change: transform;
+  /* Scaled to 2/3 */
+  filter: drop-shadow(0 0 9px rgba(0,210,255,.45)) drop-shadow(0 0 19px rgba(0,140,230,.25));
+  opacity: .9;
+}
+.shark__name {
+  position: absolute;
+  left: 50%;
+  top: -19px; /* 2/3 of -28px */
+  transform: translateX(-50%);
+  font-weight: 700;
+  font-size: 16px; /* 2/3 of 24px */
+  padding: 5px 11px; /* 2/3 of 8px 16px */
+  border-radius: 999px;
+  background: rgba(0,0,0,.55);
+  border: 1px solid rgba(255,255,255,.25);
+  text-shadow: 0 1px 2px rgba(0,0,0,.8);
+}
+
+
+/* Projectiles - futuristic optimized */
+.projectiles { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.projectile {
+  position: absolute;
+  width: 23px;  /* 2/3 of 34px */
+  height: 21px; /* 2/3 of 32px */
+  background-image: url('/props/bubblebullet.png');
+  background-size: contain;
+  background-repeat: no-repeat;
+  image-rendering: auto;
+  will-change: transform, opacity;
+  transition: transform 50ms linear, opacity .22s ease;
+  opacity: 1;
+  /* Reduced glow for better performance - removed animation */
+  filter:
+    drop-shadow(0 1px 4px rgba(0,0,0,.4))
+    drop-shadow(0 0 8px rgba(0,255,255,0.5));
+}
+.projectile.out { opacity: 0; }
+
+/* Shark HP bar */
+.shark__hp { position: absolute; left: 50%; top: 173px; /* 2/3 of 260px */ transform: translateX(-50%); width: 100px; /* 2/3 of 150px */ height: 8px; /* 2/3 of 12px */ }
+.shark__hpTrack { width: 100%; height: 7px; /* 2/3 of 10px */ background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.16); border-radius: 999px; overflow: hidden; box-shadow: inset 0 1px 2px rgba(255,255,255,0.06), 0 2px 8px rgba(0,0,0,.25); }
+.shark__hpFill { height: 100%; width: 100%; background: linear-gradient(90deg, #2aff88, #ffd24a); box-shadow: inset 0 0 5px rgba(255,255,255,0.18); /* 2/3 of 8px */ transition: width .15s ease; }
+
+/* Death overlay */
+.death-overlay { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.45); backdrop-filter: blur(6px); z-index: 50; animation: fadeIn .12s ease; }
+.death-overlay.hidden { display: none; }
+.death-dialog { width: min(92vw, 420px); background: linear-gradient(180deg, rgba(8,24,38,.96), rgba(6,20,32,.96)); border: 1px solid var(--border); border-radius: 16px; padding: 20px; box-shadow: var(--shadow); text-align: center; animation: pop .18s ease; }
+.death-dialog h2 { margin: 0 6px 10px; font-size: 28px; }
+.death-dialog .muted { margin: 6px 0 14px; }
+.death-stats { display: grid; gap: 8px; margin: 8px 0 8px; }
+.death-stats .stat { display: grid; grid-template-columns: 1fr auto; gap: 10px; background: rgba(255,255,255,0.06); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+.death-stats .label { color: var(--muted); font-weight: 700; letter-spacing: .06em; }
+.death-stats .value { font-weight: 800; color: #dff2ff; }
+
+/* Death animation - futuristic glitch effects */
+.shark.shark--dead {
+  animation: sharkDeath 1.2s ease-out forwards, glitchDeath 1.2s steps(4) forwards;
+  pointer-events: none;
+}
+.shark.shark--dead .shark__img {
+  filter: grayscale(1) brightness(.7) hue-rotate(180deg);
+  opacity: .35;
+  animation: sharkDeathSpin 1.2s ease-out forwards, digitalDissolve 1.2s ease-out forwards;
+}
+.shark.shark--dead .shark__glow {
+  animation: sharkDeathGlow 1.2s ease-out forwards;
+}
+
+@keyframes sharkDeath {
+  0% {
+    transform: translate3d(var(--death-x, 0), var(--death-y, 0), 0) scale(1);
+    opacity: 1;
+  }
+  40% {
+    transform: translate3d(var(--death-x, 0), calc(var(--death-y, 0) - 30px), 0) scale(1.15);
+    opacity: 0.9;
+  }
+  100% {
+    transform: translate3d(var(--death-x, 0), calc(var(--death-y, 0) + 80px), 0) scale(0.6);
+    opacity: 0;
+  }
+}
+
+@keyframes sharkDeathSpin {
+  0% {
+    transform: rotate(var(--death-angle, 0)) scaleY(var(--death-flip, 1)) scale(1);
+  }
+  100% {
+    transform: rotate(calc(var(--death-angle, 0) + 720deg)) scaleY(var(--death-flip, 1)) scale(0.8);
+  }
+}
+
+@keyframes sharkDeathGlow {
+  0% {
+    opacity: 0.9;
+    filter: drop-shadow(0 0 9px rgba(0,255,255,.45)) drop-shadow(0 0 19px rgba(0,200,255,.25));
+  }
+  30% {
+    opacity: 1;
+    filter: drop-shadow(0 0 30px rgba(255,0,255,.8)) drop-shadow(0 0 45px rgba(255,0,200,.6));
+  }
+  60% {
+    opacity: 0.8;
+    filter: drop-shadow(0 0 27px rgba(255,100,100,.8)) drop-shadow(0 0 40px rgba(255,50,50,.6));
+  }
+  100% {
+    opacity: 0;
+    filter: drop-shadow(0 0 40px rgba(0,255,255,.4)) drop-shadow(0 0 53px rgba(0,200,255,.2));
+  }
+}
+
+/* Digital glitch effect on death */
+@keyframes glitchDeath {
+  0%, 100% { transform: translate(0, 0); }
+  20% { transform: translate(-3px, 2px); }
+  40% { transform: translate(2px, -2px); }
+  60% { transform: translate(-2px, -1px); }
+  80% { transform: translate(1px, 2px); }
+}
+
+/* Digital dissolve effect */
+@keyframes digitalDissolve {
+  0% { opacity: 0.35; }
+  25% { opacity: 0.5; }
+  50% { opacity: 0.25; }
+  75% { opacity: 0.4; }
+  100% { opacity: 0; }
+}
+
+/* Death particle effect - futuristic digital particles optimized */
+.death-particle {
+  position: absolute;
+  width: 5px; /* 2/3 of 8px */
+  height: 5px; /* 2/3 of 8px */
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0,255,255,0.9), rgba(0,200,255,0.6));
+  box-shadow: 0 0 6px rgba(0,255,255,0.6);
+  pointer-events: none;
+  z-index: 5;
+  animation: deathParticle 1s ease-out forwards;
+}
+
+@keyframes deathParticle {
+  0% {
+    transform: translate(0, 0) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(var(--px), var(--py)) scale(0.3);
+    opacity: 0;
+  }
+}
+
+
+/* HUD */
+.hud { position: absolute; inset: 16px; pointer-events: none; z-index: 12; }
+.panel {
+  pointer-events: auto;
+  position: absolute;
+  left: 0;
+  top: 48px;
+  background:
+    linear-gradient(180deg, rgba(0,0,0,.5), rgba(0,0,0,.42)),
+    repeating-linear-gradient(0deg, transparent 0 2px, rgba(0,255,255,.03) 2px 4px);
+  border: 1px solid rgba(0,255,255,0.3);
+  border-radius: 14px;
+  padding: 8px 10px;
+  position: relative;
+  /* Reduced glow for better performance */
+  box-shadow:
+    var(--shadow),
+    0 0 15px rgba(0,255,255,0.3),
+    inset 0 1px 0 rgba(0,255,255,0.15);
+  /* Removed backdrop-filter for performance - increased background opacity instead */
+  width: fit-content;
+}
+/* Futuristic corner accents */
+.panel::before,
+.panel::after {
+  content: "";
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border: 2px solid rgba(0,255,255,0.6);
+  pointer-events: none;
+}
+.panel::before {
+  top: -1px;
+  left: -1px;
+  border-right: none;
+  border-bottom: none;
+  border-top-left-radius: 14px;
+}
+.panel::after {
+  bottom: -1px;
+  right: -1px;
+  border-left: none;
+  border-top: none;
+  border-bottom-right-radius: 14px;
+}
+.panel .label {
+  color: #00ffff;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .18em;
+  margin-bottom: 6px;
+  text-shadow: 0 0 6px rgba(0,255,255,0.6);
+}
+.panel .row {
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  color: #e3f5ff;
+  font-size: 13px;
+}
+/* Hit flash layer using the same sprite to respect alpha (only colored pixels tint) */
+.shark__flash { position: absolute; inset: 0; background-image: url('/sharks/Baby%20Shark.png'); background-size: cover; image-rendering: crisp-edges; opacity: 0; pointer-events: none; filter: grayscale(1) brightness(1.1) sepia(1) hue-rotate(-20deg) saturate(7); mix-blend-mode: screen; will-change: opacity, transform; }
+.shark.shark--hit .shark__flash { opacity: .85; animation: hitFlash 140ms ease-out forwards; }
+
+.minimap {
+  pointer-events: auto;
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 200px;
+  height: 200px;
+  border-radius: 14px;
+  background:
+    radial-gradient(120% 120% at 0% 0%, rgba(0,58,72,.92), rgba(0,38,50,.90)),
+    repeating-linear-gradient(0deg, transparent 0 2px, rgba(0,255,255,.03) 2px 4px);
+  border: 1px solid rgba(0,255,255,.35);
+  box-shadow:
+    0 8px 30px rgba(0,0,0,.45),
+    inset 0 0 30px rgba(0,255,255,.1),
+    0 0 15px rgba(0,255,255,0.3),
+    inset 0 1px 0 rgba(0,255,255,0.2);
+  overflow: hidden;
+}
+/* Futuristic corner accents for minimap */
+.minimap::before,
+.minimap::after {
+  content: "";
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(0,255,255,0.6);
+  pointer-events: none;
+  z-index: 10;
+}
+.minimap::before {
+  top: 0;
+  right: 0;
+  border-left: none;
+  border-bottom: none;
+  border-top-right-radius: 14px;
+}
+.minimap::after {
+  bottom: 0;
+  left: 0;
+  border-right: none;
+  border-top: none;
+  border-bottom-left-radius: 14px;
+}
+
+/* Subtle vignette overlay for immersion */
+.game::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(120% 90% at 50% -10%, rgba(0,0,0,0) 40%, rgba(0,0,0,.22) 80%), radial-gradient(100% 80% at 50% 120%, rgba(0,0,0,0) 40%, rgba(0,0,0,.24) 78%); mix-blend-mode: multiply; }
+
+/* Food */
+.food {
+  position: absolute;
+  background-image: url('/food/FishFood.png');
+  background-size: contain;
+  background-repeat: no-repeat;
+  image-rendering: crisp-edges;
+  will-change: transform, opacity;
+  /* Optimized: lighter drop-shadow */
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,.3));
+  z-index: 1;
+  transition: transform 120ms ease, opacity 120ms ease;
+}
+.food--eaten { transform: scale(0.6); opacity: 0; }
+
+/* Eat pop effect */
+.eat-pop { position: absolute; width: 22px; height: 22px; border-radius: 999px; border: 2px solid rgba(125,227,255,.6); pointer-events: none; mix-blend-mode: screen; transform: translate(-50%, -50%) scale(0.6); opacity: .85; animation: eat-pop 300ms ease-out forwards; z-index: 3; }
+@keyframes eat-pop { to { transform: translate(-50%, -50%) scale(1.8); opacity: 0; border-color: rgba(125,227,255,0); } }
+
+/* Stats container - holds level and score bars side by side */
+.stats-container {
+  position: absolute;
+  left: 50%;
+  top: 8px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  z-index: 10;
+  pointer-events: auto;
+}
+
+/* Level bar (yellow theme) - futuristic optimized */
+.levelbar {
+  width: min(280px, 35vw);
+  padding: 10px 12px;
+  border-radius: 14px;
+  background:
+    rgba(0,0,0,.45),
+    repeating-linear-gradient(0deg, transparent 0 2px, rgba(255,200,0,.03) 2px 4px);
+  border: 1px solid rgba(255,200,0,0.3);
+  position: relative;
+  /* Reduced glow for better performance */
+  box-shadow:
+    var(--shadow),
+    0 0 15px rgba(255,200,0,0.3),
+    inset 0 1px 0 rgba(255,200,0,0.15);
+  /* Removed backdrop-filter for performance - increased background opacity */
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+}
+/* Futuristic corner accents for levelbar */
+.levelbar::before,
+.levelbar::after {
+  content: "";
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border: 2px solid rgba(255,200,0,0.6);
+  pointer-events: none;
+}
+.levelbar::before {
+  top: -1px;
+  left: -1px;
+  border-right: none;
+  border-bottom: none;
+  border-top-left-radius: 14px;
+}
+.levelbar::after {
+  bottom: -1px;
+  right: -1px;
+  border-left: none;
+  border-top: none;
+  border-bottom-right-radius: 14px;
+}
+.levelbar__label {
+  color: #ffd44a;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-shadow: 0 0 6px rgba(255,200,0,0.6);
+}
+.levelbar__track {
+  grid-column: 1 / -1;
+  height: 12px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,200,0,0.2);
+  border-radius: 999px;
+  overflow: hidden;
+  position: relative;
+  box-shadow: inset 0 0 8px rgba(255,200,0,0.1);
+}
+.levelbar__fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  background: linear-gradient(90deg, #ffe166, #ffb400);
+  box-shadow:
+    inset 0 0 10px rgba(255,255,255,.25),
+    0 0 10px rgba(255, 200, 0, .3);
+  transition: width .2s ease-out;
+}
+.levelbar__value {
+  justify-self: end;
+  font-weight: 800;
+  font-size: 14px;
+  color: #fff0bf;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,200,0,0.3);
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+/* Score bar - futuristic optimized */
+.scorebar {
+  width: min(280px, 35vw);
+  padding: 10px 12px;
+  border-radius: 14px;
+  background:
+    rgba(0,0,0,.45),
+    repeating-linear-gradient(0deg, transparent 0 2px, rgba(0,255,255,.03) 2px 4px);
+  border: 1px solid rgba(0,255,255,0.3);
+  position: relative;
+  /* Reduced glow for better performance */
+  box-shadow:
+    var(--shadow),
+    0 0 15px rgba(0,255,255,0.3),
+    inset 0 1px 0 rgba(0,255,255,0.15);
+  /* Removed backdrop-filter for performance - increased background opacity */
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+}
+/* Futuristic corner accents for scorebar */
+.scorebar::before,
+.scorebar::after {
+  content: "";
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border: 2px solid rgba(0,255,255,0.6);
+  pointer-events: none;
+}
+.scorebar::before {
+  top: -1px;
+  right: -1px;
+  border-left: none;
+  border-bottom: none;
+  border-top-right-radius: 14px;
+}
+.scorebar::after {
+  bottom: -1px;
+  left: -1px;
+  border-right: none;
+  border-top: none;
+  border-bottom-left-radius: 14px;
+}
+.scorebar__label {
+  color: #00ffff;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-shadow: 0 0 6px rgba(0,255,255,0.6);
+}
+.scorebar__track {
+  grid-column: 1 / -1;
+  height: 12px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(0,255,255,0.2);
+  border-radius: 999px;
+  overflow: hidden;
+  position: relative;
+  box-shadow: inset 0 0 8px rgba(0,255,255,0.1);
+}
+.scorebar__fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  background: linear-gradient(90deg, var(--primary), #1bb1ff);
+  box-shadow:
+    inset 0 0 10px rgba(255,255,255,.2),
+    0 0 10px rgba(0,255,255,.3);
+  transition: width .2s ease-out;
+}
+.scorebar__value {
+  justify-self: end;
+  font-weight: 800;
+  font-size: 14px;
+  color: #dff2ff;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(0,255,255,0.3);
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+/* Performance chip (top-left) - futuristic */
+.perf-chip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  margin: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background:
+    rgba(0,0,0,.45),
+    repeating-linear-gradient(90deg, transparent 0 2px, rgba(0,255,255,.03) 2px 4px);
+  border: 1px solid rgba(0,255,255,0.3);
+  box-shadow:
+    var(--shadow),
+    0 0 15px rgba(0,255,255,0.3),
+    inset 0 1px 0 rgba(0,255,255,0.15);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: .02em;
+  pointer-events: auto;
+}
+.perf-chip span {
+  color: #00ffff;
+  text-shadow: 0 0 4px rgba(0,255,255,0.6);
+}
+
+/* Leaderboard (top-right) - futuristic optimized */
+.leaderboard {
+  position: absolute !important;
+  right: 0 !important;
+  left: auto !important;
+  top: 0;
+  width: min(280px, 40vw);
+  background:
+    rgba(0,0,0,.48),
+    repeating-linear-gradient(0deg, transparent 0 2px, rgba(0,255,255,.03) 2px 4px);
+  border: 1px solid rgba(0,255,255,0.3);
+  border-radius: 14px;
+  /* Reduced glow for better performance */
+  box-shadow:
+    var(--shadow),
+    0 0 15px rgba(0,255,255,0.3),
+    inset 0 1px 0 rgba(0,255,255,0.15);
+  /* Removed backdrop-filter for performance - increased background opacity */
+  overflow: hidden;
+  pointer-events: auto;
+}
+/* Futuristic corner accents for leaderboard */
+.leaderboard::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(0,255,255,0.6);
+  border-left: none;
+  border-bottom: none;
+  border-top-right-radius: 14px;
+  pointer-events: none;
+  z-index: 10;
+}
+.leaderboard::before {
+  content: "LEADERBOARD";
+  display: block;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .18em;
+  color: #00ffff;
+  border-bottom: 1px solid rgba(0,255,255,0.2);
+  text-shadow: 0 0 6px rgba(0,255,255,0.6);
+  position: relative;
+  z-index: 1;
+}
+.leaderboard__list { list-style: none; margin: 0; padding: 6px; }
+.leaderboard__item {
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px;
+  border-radius: 10px;
+  transition: transform .25s ease, background .2s ease, opacity .2s ease;
+}
+.leaderboard__item:hover {
+  background: rgba(0,255,255,0.08);
+  box-shadow: 0 0 10px rgba(0,255,255,0.2);
+}
+.leaderboard__rank {
+  font-weight: 900;
+  color: #ffe46b;
+  text-align: center;
+}
+.leaderboard__name {
+  font-weight: 700;
+  color: var(--fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.leaderboard__score {
+  font-weight: 800;
+  color: #00ffff;
+  background: rgba(0,255,255,0.08);
+  border: 1px solid rgba(0,255,255,0.3);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+
+/* --- FX: Damage overlays, ripples, impact flash, trail, score popup --- */
+.fx-vignette { position: absolute; inset: 0; pointer-events: none; z-index: 6; }
+.fx-vignette.active { outline: 0 solid rgba(255,0,0,0); animation: redPulse 240ms ease-out; }
+@keyframes redPulse {
+  0% { box-shadow: inset 0 0 0 0 rgba(255, 80, 80, .0); }
+  30% { box-shadow: inset 0 0 0 12px rgba(255, 80, 80, .20), inset 0 0 80px 30px rgba(255, 40, 40, .25); }
+  100% { box-shadow: inset 0 0 0 0 rgba(255, 80, 80, .0); }
+}
+
+/* Critical HP tunnel vision + blur (world only) - optimized */
+.fx-critical { position: absolute; inset: 0; pointer-events: none; z-index: 5; opacity: 0; transition: opacity .2s ease; }
+.fx-critical.active {
+  opacity: 1;
+  /* Removed expensive backdrop-filter blur for performance */
+  background: radial-gradient(120% 90% at 50% -10%, rgba(0,0,0,0) 38%, rgba(180,0,0,.15) 70%), radial-gradient(100% 80% at 50% 120%, rgba(0,0,0,0) 40%, rgba(120,0,0,.18) 78%);
+  mix-blend-mode: multiply;
+}
+
+/* Ripple when bubbles pop or impact - futuristic optimized */
+.ripple {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%) scale(.5);
+  border: 2px solid rgba(0,255,255,.7);
+  border-radius: 999px;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  opacity: .9;
+  animation: ripple 420ms ease-out forwards;
+  z-index: 4;
+  box-shadow: 0 0 10px rgba(0,255,255,0.4);
+}
+@keyframes ripple {
+  to {
+    transform: translate(-50%, -50%) scale(1.8);
+    opacity: 0;
+    border-color: rgba(0,255,255,0);
+    box-shadow: 0 0 20px rgba(0,255,255,0);
+  }
+}
+
+/* Impact flash animation keyframes (reused by flash layer) */
+@keyframes hitFlash { from { opacity: .9 } to { opacity: 0 } }
+
+/* Water trail bubbles using provided 16x16 sprite - optimized */
+.trail-bubble {
+  position: absolute;
+  width: 11px;  /* 2/3 of 16px */
+  height: 11px; /* 2/3 of 16px */
+  background: url('/props/watertrailbubble.png') center/contain no-repeat;
+  image-rendering: crisp-edges;
+  opacity: .85;
+  /* Removed drop-shadow for performance */
+  will-change: transform, opacity;
+  animation: trailRise 900ms ease-out forwards;
+  z-index: 1;
+}
+@keyframes trailRise {
+  0% { transform: translate3d(var(--x,0), var(--y,0), 0) scale(1); opacity: .95 }
+  100% { transform: translate3d(var(--x,0), calc(var(--y,0) - 12px), 0) scale(.9); opacity: 0 } /* 2/3 of -18px = -12px */
+}
+
+/* Score popup above local shark - futuristic holographic optimized */
+.score-popup {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+  font-weight: 900;
+  font-size: 11px; /* 2/3 of 16px */
+  color: #00ffff;
+  text-shadow:
+    0 0 8px rgba(0,255,255,0.6),
+    0 1px 5px rgba(0,0,0,.6);
+  pointer-events: none;
+  animation: scorePopFade 800ms ease-out forwards;
+  z-index: 6;
+}
+@keyframes scorePopFade {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(.9); }
+  15% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.06); }
+}
+
+
+/* Kill feed (top-right under leaderboard) - futuristic */
+.kill-feed {
+  position: absolute;
+  right: 0;
+  top: 210px;
+  width: min(280px, 40vw);
+  display: grid;
+  gap: 6px;
+  padding: 6px;
+  pointer-events: none;
+  z-index: 14;
+}
+.kill-feed .feed-item {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background:
+    rgba(0,0,0,.38),
+    repeating-linear-gradient(90deg, transparent 0 2px, rgba(0,255,255,.03) 2px 4px);
+  border: 1px solid rgba(0,255,255,0.3);
+  box-shadow:
+    var(--shadow),
+    0 0 15px rgba(0,255,255,0.3),
+    inset 0 1px 0 rgba(0,255,255,0.15);
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 700;
+  opacity: .98;
+  animation: fadeIn .15s ease;
+}
+.kill-feed .feed-item .who {
+  color: #00ffff;
+}
+.kill-feed .feed-item .what {
+  color: #dff2ff;
+}
+.kill-feed .feed-item .assist {
+  color: #ffe46b;
+}
+
+/* Top notification (center, slides in and out) - futuristic */
+.top-notify {
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 8px;
+  z-index: 30;
+  pointer-events: none;
+}
+.top-notify .notice {
+  padding: 10px 14px;
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(0,0,0,.55), rgba(0,0,0,.45)),
+    repeating-linear-gradient(90deg, transparent 0 2px, rgba(0,255,255,.03) 2px 4px);
+  border: 1px solid rgba(0,255,255,0.4);
+  box-shadow:
+    var(--shadow),
+    0 0 20px rgba(0,255,255,0.4),
+    inset 0 1px 0 rgba(0,255,255,0.2);
+  font-weight: 800;
+  letter-spacing: .02em;
+  color: #00ffff;
+  text-shadow: 0 0 6px rgba(0,255,255,0.6);
+  transform: translateY(-10px);
+  opacity: 0;
+  animation: notifyIn .18s ease forwards;
+}
+@keyframes notifyIn { to { transform: translateY(0); opacity: 1 } }
+@keyframes notifyOut { to { transform: translateY(-10px); opacity: 0 } }
+
+/* Center actions in death dialog */
+.death-dialog .dialog-actions {
+  justify-content: center;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
