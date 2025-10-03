@@ -8,7 +8,7 @@
     "dev:static": "node --max-old-space-size=2048 ./node_modules/.bin/ts-node --transpile-only server/static-server.ts",
     "dev:game": "node --max-old-space-size=4096 ./node_modules/.bin/ts-node --transpile-only --project server/tsconfig.json server/game/server.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "concurrently \"npm:start:static\" \"npm:start:game\"",
+    "start": "node --max-old-space-size=4096 ./node_modules/.bin/ts-node --transpile-only --project server/tsconfig.json server/unified-server.ts",
     "start:static": "node --max-old-space-size=2048 ./node_modules/.bin/ts-node --transpile-only server/static-server.ts",
     "start:game": "node --max-old-space-size=4096 ./node_modules/.bin/ts-node --transpile-only --project server/tsconfig.json server/game/server.ts",
     "game-server": "node --max-old-space-size=4096 ./node_modules/.bin/ts-node --project server/tsconfig.json server/game/server.ts"
