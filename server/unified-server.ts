@@ -541,13 +541,18 @@ async function saveUsers(users: any[]): Promise<void> {
 // HTTP SERVER (Static Files + API + Socket.IO)
 // ============================================
 
-const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+// Create HTTP server WITHOUT a request handler first
+// Socket.IO will attach to it, then we'll add our handler
+const httpServer = createServer();
+
+// Add request handler for static files and API
+httpServer.on('request', async (req: IncomingMessage, res: ServerResponse) => {
   const url = req.url || '/';
   const method = (req.method || 'GET').toUpperCase();
 
-  // Skip Socket.IO routes - let Socket.IO handle them
+  // Skip Socket.IO routes - Socket.IO already handles them
   if (url.startsWith('/socket.io/')) {
-    return; // Socket.IO will handle this
+    return; // Already handled by Socket.IO
   }
 
   // API routes
@@ -652,7 +657,18 @@ const io = new Server(httpServer, {
     maxHttpBufferSize: 1e6,
     allowUpgrades: true,
     perMessageDeflate: false,
-    httpCompression: false
+    httpCompression: false,
+    // Ensure proper connection handling
+    connectTimeout: 45000,
+    // Path for Socket.IO (explicit)
+    path: '/socket.io/',
+    // Server-side options
+    serveClient: false,
+    // Connection state recovery (helps with reconnections)
+    connectionStateRecovery: {
+        maxDisconnectionDuration: 2 * 60 * 1000, // 2 minutes
+        skipMiddlewares: true,
+    }
 });
 
 const gameState: GameState = {
@@ -987,12 +1003,17 @@ function updateFoods(dt: number): Array<{ id: number; x: number; y: number }> {
 }
 
 io.on('connection', (socket) => {
-    console.log('Player connected:', socket.id);
+    const clientIp = socket.handshake.address;
+    const transport = socket.conn.transport.name;
+    console.log(`Player connected: ${socket.id} from ${clientIp} via ${transport}`);
+    console.log(`Total players online: ${Object.keys(gameState.players).length + 1}`);
 
     // Initialize new player
     socket.on('player:join', (username: string) => {
         // Validate and sanitize username (max 20 characters for in-game names)
         const sanitizedUsername = (username || 'Player').trim().slice(0, 20);
+
+        console.log(`Player joining: ${sanitizedUsername} (${socket.id})`);
 
         // Spawn players in the center area of the map (avoid borders for better camera view)
         usernames.set(socket.id, sanitizedUsername);
@@ -1379,8 +1400,11 @@ io.on('connection', (socket) => {
     });
 
     // Handle disconnection
-    socket.on('disconnect', () => {
-        console.log('Player disconnected:', socket.id);
+    socket.on('disconnect', (reason) => {
+        const username = usernames.get(socket.id) || 'Unknown';
+        console.log(`Player disconnected: ${username} (${socket.id}) - Reason: ${reason}`);
+        console.log(`Total players remaining: ${Object.keys(gameState.players).length - 1}`);
+
         // Remove player's active bubbles and cooldown entry
         for (const id of Object.keys(bubbles)) { if (bubbles[Number(id)]?.ownerId === socket.id) delete bubbles[Number(id)]; }
         lastShotAt.delete(socket.id);
@@ -1549,13 +1573,20 @@ setInterval(() => {
 }, TICK_MS);
 
 
-// Use environment PORT for production (Render.com), fallback to 3000 for local dev
+// Use environment PORT for production (Fly.io/Render.com), fallback to 3000 for local dev
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 
 httpServer.listen(PORT, HOST, () => {
+    console.log('='.repeat(60));
     console.log(`🚀 Unified server (Static + Game) running on ${HOST}:${PORT}`);
     console.log(`📦 Environment: ${process.env.NODE_ENV || 'development'}`);
     console.log(`🎮 Map size: ${MAP_SIZE}x${MAP_SIZE} pixels`);
+    console.log(`🦈 Shark evolutions: ${SHARK_EVOLUTIONS.length} types loaded`);
+    console.log(`📊 Level steps: ${LEVEL_STEPS.length} levels configured`);
+    console.log(`🌐 CORS origins: ${allowedOrigins.join(', ')}`);
+    console.log(`🔌 Socket.IO transports: websocket, polling`);
+    console.log(`⚡ Tick rate: ${TICK_MS}ms (${Math.round(1000/TICK_MS)} FPS)`);
     console.log(`✅ Static files, API, and Socket.IO game server ready!`);
+    console.log('='.repeat(60));
 });
