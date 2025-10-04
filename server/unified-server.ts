@@ -545,6 +545,11 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
   const url = req.url || '/';
   const method = (req.method || 'GET').toUpperCase();
 
+  // Skip Socket.IO routes - let Socket.IO handle them
+  if (url.startsWith('/socket.io/')) {
+    return; // Socket.IO will handle this
+  }
+
   // API routes
   if (url.startsWith('/api/users')) {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -640,7 +645,14 @@ const io = new Server(httpServer, {
         credentials: true
     },
     transports: ['websocket', 'polling'],
-    allowEIO3: true
+    allowEIO3: true,
+    pingTimeout: 60000,
+    pingInterval: 25000,
+    upgradeTimeout: 30000,
+    maxHttpBufferSize: 1e6,
+    allowUpgrades: true,
+    perMessageDeflate: false,
+    httpCompression: false
 });
 
 const gameState: GameState = {
@@ -1113,6 +1125,60 @@ io.on('connection', (socket) => {
                     // Keep the other player's speed limiter in sync
                     lastPos.set(hitOther.id, { x: hitOther.x, y: hitOther.y });
                     lastUpdate.set(hitOther.id, now);
+
+                    // Apply collision damage to both sharks (no cooldown)
+                    me.hp = Math.max(0, (me.hp ?? 100) - SHARK_COLLISION_DAMAGE);
+                    hitOther.hp = Math.max(0, (hitOther.hp ?? 100) - SHARK_COLLISION_DAMAGE);
+
+                    console.log(`Collision: ${me.username} (${me.hp}HP) <-> ${hitOther.username} (${hitOther.hp}HP)`);
+
+                    // Record damage for kill/assist tracking
+                    recordDamage(me.id, hitOther.id, SHARK_COLLISION_DAMAGE, now);
+                    recordDamage(hitOther.id, me.id, SHARK_COLLISION_DAMAGE, now);
+
+                    // Emit collision event to both players for visual effects
+                    const meSock = io.sockets.sockets.get(me.id);
+                    const otherSock = io.sockets.sockets.get(hitOther.id);
+                    if (meSock) meSock.emit('shark:collision', { damage: SHARK_COLLISION_DAMAGE });
+                    if (otherSock) otherSock.emit('shark:collision', { damage: SHARK_COLLISION_DAMAGE });
+
+                    dirty = true; // HP changed, need to broadcast
+
+                    // Check for deaths
+                    if (me.hp <= 0 && !me.dead) {
+                        me.dead = true;
+                        const s = io.sockets.sockets.get(me.id);
+                        s?.emit('player:died');
+                        try { handleDeathAndAwards(me, hitOther.id, now); } catch {}
+                        // Remove bubbles and state
+                        for (const bid of Object.keys(bubbles)) {
+                            if (bubbles[Number(bid)]?.ownerId === me.id) { delete bubbles[Number(bid)]; projDirty = true; }
+                        }
+                        lastShotAt.delete(me.id);
+                        lastUpdate.delete(me.id);
+                        lastPos.delete(me.id);
+                        setTimeout(() => {
+                            delete gameState.players[me.id];
+                            io.emit('player:left', me.id);
+                        }, 1200);
+                    }
+                    if (hitOther.hp <= 0 && !hitOther.dead) {
+                        hitOther.dead = true;
+                        const s = io.sockets.sockets.get(hitOther.id);
+                        s?.emit('player:died');
+                        try { handleDeathAndAwards(hitOther, me.id, now); } catch {}
+                        // Remove bubbles and state
+                        for (const bid of Object.keys(bubbles)) {
+                            if (bubbles[Number(bid)]?.ownerId === hitOther.id) { delete bubbles[Number(bid)]; projDirty = true; }
+                        }
+                        lastShotAt.delete(hitOther.id);
+                        lastUpdate.delete(hitOther.id);
+                        lastPos.delete(hitOther.id);
+                        setTimeout(() => {
+                            delete gameState.players[hitOther.id];
+                            io.emit('player:left', hitOther.id);
+                        }, 1200);
+                    }
                 } else if (blocked) {
                     nx = me.x;
                     ny = me.y;
