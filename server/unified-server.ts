@@ -661,7 +661,7 @@ const io = new Server(httpServer, {
     // Ensure proper connection handling
     connectTimeout: 45000,
     // Path for Socket.IO (explicit)
-    path: '/socket.io/',
+    path: '/socket.io',
     // Server-side options
     serveClient: false,
     // Connection state recovery (helps with reconnections)

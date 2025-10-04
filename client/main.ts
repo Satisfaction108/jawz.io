@@ -1382,7 +1382,11 @@ function initSocket(username: string) {
   const SOCKET_URL = isDev ? 'http://localhost:3002' : window.location.origin;
 
   console.log('Connecting to socket server:', SOCKET_URL);
-  socket = io(SOCKET_URL);
+  socket = io(SOCKET_URL, {
+    path: '/socket.io',
+    transports: ['websocket'],
+    withCredentials: true
+  });
 
   // Projectiles + death events
   socket.on('projectiles:update', (arr: Array<{ id: number; x: number; y: number }>) => {
