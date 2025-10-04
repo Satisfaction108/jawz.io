@@ -132,12 +132,12 @@
     drop-shadow(0 5px 11px rgba(0,0,0,.6))
     drop-shadow(0 0 15px rgba(0,255,255,0.5))
     drop-shadow(0 0 25px rgba(0,200,255,0.25));
-  z-index: 2;
+  /* No z-index - all sharks render at same layer, no overlap */
 }
 .shark__img {
   position: absolute;
   inset: 0;
-  background-image: url('/sharks/Baby%20Shark.png');
+  /* Background image set dynamically by client based on shark evolution */
   background-size: cover;
   image-rendering: crisp-edges;
   transition: transform 140ms cubic-bezier(.2,.8,.2,1);
@@ -150,7 +150,7 @@
 .shark__glow {
   position: absolute;
   inset: 0;
-  background-image: url('/sharks/Baby%20Shark.png');
+  /* background-image set dynamically to match current shark */
   background-size: cover;
   image-rendering: crisp-edges;
   pointer-events: none;
@@ -160,6 +160,7 @@
   opacity: .9;
 }
 .shark__name {
+
   position: absolute;
   left: 50%;
   top: -19px; /* 2/3 of -28px */
@@ -171,6 +172,11 @@
   background: rgba(0,0,0,.55);
   border: 1px solid rgba(255,255,255,.25);
   text-shadow: 0 1px 2px rgba(0,0,0,.8);
+  text-align: center;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 
@@ -373,7 +379,7 @@
   font-size: 13px;
 }
 /* Hit flash layer using the same sprite to respect alpha (only colored pixels tint) */
-.shark__flash { position: absolute; inset: 0; background-image: url('/sharks/Baby%20Shark.png'); background-size: cover; image-rendering: crisp-edges; opacity: 0; pointer-events: none; filter: grayscale(1) brightness(1.1) sepia(1) hue-rotate(-20deg) saturate(7); mix-blend-mode: screen; will-change: opacity, transform; }
+.shark__flash { position: absolute; inset: 0; /* background-image set dynamically */ background-size: cover; image-rendering: crisp-edges; opacity: 0; pointer-events: none; filter: grayscale(1) brightness(1.1) sepia(1) hue-rotate(-20deg) saturate(7); mix-blend-mode: screen; will-change: opacity, transform; }
 .shark.shark--hit .shark__flash { opacity: .85; animation: hitFlash 140ms ease-out forwards; }
 
 .minimap {
@@ -906,5 +912,58 @@
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+/* Evolution smoke particle effect (Brawl Stars style) */
+.evolution-smoke {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255,255,255,0.9) 0%, rgba(240,240,240,0.6) 35%, rgba(200,225,255,0.35) 70%, transparent 100%);
+  box-shadow:
+    0 0 18px rgba(255,255,255,0.7),
+    0 0 30px rgba(140,210,255,0.45),
+    inset 0 0 12px rgba(255,255,255,0.4);
+  filter: blur(1.5px);
+  animation: smokeExpand 0.7s ease-out forwards;
+  will-change: transform, opacity;
+  z-index: 1000;
+}
+
+@keyframes smokeExpand {
+  0% {
+    transform: translate(0, 0) scale(0.35) rotate(0deg);
+    opacity: 1;
+  }
+  50% {
+    transform: translate(calc(var(--offset-x) * 0.7), calc(var(--offset-y) * 0.7 - 15px)) scale(1.25) rotate(calc(var(--rotation) * 0.5));
+    opacity: 0.85;
+  }
+  100% {
+    transform: translate(var(--offset-x), calc(var(--offset-y) - 34px)) scale(1.6) rotate(var(--rotation));
+    opacity: 0;
+  }
+}
+
+/* Central veil that blankets the shark during evolution to hide the sprite swap */
+.evolution-smoke-veil {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255,255,255,0.95) 0%, rgba(235,235,235,0.7) 45%, rgba(200,225,255,0.35) 70%, transparent 100%);
+  box-shadow:
+    0 0 24px rgba(255,255,255,0.75),
+    0 0 40px rgba(140,210,255,0.5),
+    inset 0 0 16px rgba(255,255,255,0.45);
+  filter: blur(1px);
+  animation: veilExpand 0.55s ease-out forwards;
+  will-change: transform, opacity;
+  z-index: 1001; /* above smoke particles and shark */
+}
+
+@keyframes veilExpand {
+  0% { transform: translate(0,0) scale(0.6); opacity: 0.95; }
+  50% { transform: translate(0, -10px) scale(1.15); opacity: 0.85; }
+  100% { transform: translate(0, -22px) scale(1.35); opacity: 0; }
 }
 

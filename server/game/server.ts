@@ -12,6 +12,8 @@ interface Player {
     score: number;
     hp: number;      // health points (0-100)
     dead: boolean;   // death state
+    level: number;   // current level (1-100+)
+    sharkType: string; // current shark sprite filename (e.g., "baby shark.png")
 }
 
 interface Food { id: number; x: number; y: number; vx?: number; vy?: number; }
@@ -54,6 +56,9 @@ type Bubble = {
 const BUBBLE_SPEED = 900;        // px/s, fast and consistent
 const BUBBLE_TTL_MS = 1000;      // lifespan 1.0 seconds (auto fade after removal on client)
 const SHOOT_COOLDOWN_MS = 500;   // 0.5 seconds per player (reload)
+const SHARK_COLLISION_DAMAGE = 10; // damage dealt when sharks collide
+const SHARK_COLLISION_COOLDOWN_MS = 1000; // 1 second cooldown between collision damage
+
 // Mouth offset relative to shark center (rotate by angle + 180deg)
 // Note: These are in mask space (256x256), will be scaled to render space when used
 let MOUTH_OFFSET_X = 26 - (SHARK_MASK_SIZE / 2);  // fallback if mask not available
@@ -85,6 +90,8 @@ const lastPos = new Map<string, { x: number; y: number }>();
 // Per-player shooting cooldown timestamps
 const lastShotAt = new Map<string, number>();
 
+// Per-player-pair collision damage cooldown (key: "id1:id2" sorted)
+const lastCollisionDamageAt = new Map<string, number>();
 
 // Keep last known username per socket (used to respawn after death removal)
 const usernames = new Map<string, string>();
@@ -102,6 +109,13 @@ const damageByVictim = new Map<string, Map<string, { dmg: number; last: number }
 // Level progression (XP to go from level L to L+1), zero-based index (0 => 1->2)
 let LEVEL_STEPS: number[] = [];
 
+// Shark evolution system
+type SharkEvolution = { [key: string]: { [key: string]: string } };
+let SHARK_EVOLUTIONS: string[] = []; // Ordered list of shark filenames
+const sharkMasks = new Map<string, Uint8Array>(); // Cache of loaded shark masks
+const sharkMouthOffsets = new Map<string, { x: number; y: number }>(); // Mouth positions per shark
+const sharkTailOffsets = new Map<string, { x: number; y: number }>(); // Tail positions per shark
+
 function parseBinaryMask(txt: string, w: number, h: number): Uint8Array {
   // Keep only 0/1 and newlines, flatten
   const flat = txt.replace(/[^01\n]/g, '').replace(/\n+/g, '');
@@ -109,6 +123,14 @@ function parseBinaryMask(txt: string, w: number, h: number): Uint8Array {
   const n = Math.min(flat.length, w * h);
   for (let i = 0; i < n; i++) arr[i] = flat.charCodeAt(i) === 49 ? 1 : 0;
   return arr;
+}
+
+// Visual scale per shark type: baby small → megalodon large
+function getSharkScaleForType(type: string): number {
+  const idx = SHARK_EVOLUTIONS ? SHARK_EVOLUTIONS.indexOf(type) : -1;
+  if (idx < 0) return 1.0;
+  // Smooth progression: 1.00 at index 0 → ~1.38 at index 19
+  return Math.min(1.4, 1.0 + 0.02 * idx);
 }
 
 function resampleNearest(src: Uint8Array, srcW: number, srcH: number, dstW: number, dstH: number): Uint8Array {
@@ -143,6 +165,136 @@ async function loadLevelProgression(): Promise<void> {
   }
 }
 
+async function loadSharkEvolutions(): Promise<void> {
+  try {
+    const p = path.join('server', 'sharks', 'sharkevolutionranking.json');
+    const txt = await fsp.readFile(p, 'utf8');
+    const data = JSON.parse(txt);
+    // Extract ordered list of shark filenames
+    const evolutions: string[] = [];
+    for (let i = 1; i <= 20; i++) {
+      const key = `shark${i}`;
+      if (data[key]) {
+        const innerKey = Object.keys(data[key])[0];
+        evolutions.push(data[key][innerKey]);
+      }
+    }
+    SHARK_EVOLUTIONS = evolutions;
+    console.log(`Loaded ${SHARK_EVOLUTIONS.length} shark evolutions`);
+  } catch (e) {
+    console.error('Failed to load shark evolutions', e);
+    SHARK_EVOLUTIONS = ['Baby Shark.png']; // fallback
+  }
+}
+
+// Compute level from score using LEVEL_STEPS
+function computeLevel(score: number): number {
+  if (!LEVEL_STEPS || LEVEL_STEPS.length === 0) return 1;
+  let lvl = 1;
+  let remaining = Math.max(0, score | 0);
+  for (let i = 0; i < LEVEL_STEPS.length; i++) {
+    const need = LEVEL_STEPS[i] | 0;
+    if (remaining >= need) {
+      remaining -= need;
+      lvl++;
+    } else {
+      break;
+    }
+  }
+  return Math.min(100, lvl); // cap at level 100
+}
+
+// Get shark type from level (every 5 levels, capped at megalodon for 100+)
+function getSharkTypeForLevel(level: number): string {
+  if (!SHARK_EVOLUTIONS || SHARK_EVOLUTIONS.length === 0) return 'Baby Shark.png';
+  // Level 1-4: shark 1 (baby shark) - index 0
+  // Level 5-9: shark 2 (zebra shark) - index 1
+  // Level 10-14: shark 3 (nurse shark) - index 2
+  // ...
+  // Level 100+: shark 20 (megalodon) - index 19
+  const index = Math.min(19, Math.floor(level / 5));
+  return SHARK_EVOLUTIONS[index] || 'Baby Shark.png';
+}
+
+// Format shark name for display (e.g., "Baby Shark.png" -> "Baby Shark")
+function formatSharkName(sharkType: string): string {
+  return sharkType.replace('.png', '');
+}
+
+// Compute tail anchor from mask (rightmost opaque edge, median row)
+function computeTailAnchorFromMask(mask: Uint8Array, size: number): { x: number; y: number } {
+  let maxX = -1, rows: number[] = [];
+  const rightmost = new Array<number>(size).fill(-1);
+  for (let y = 0; y < size; y++) {
+    for (let x = size - 1; x >= 0; x--) {
+      if (mask[y * size + x] !== 0) {
+        rightmost[y] = x;
+        if (x > maxX) maxX = x;
+        break;
+      }
+    }
+  }
+  for (let y = 0; y < size; y++) if (rightmost[y] >= maxX - 2) rows.push(y);
+  const yMed = rows.length ? rows[Math.floor(rows.length / 2)] : Math.round(size / 2);
+  return { x: maxX, y: yMed };
+}
+
+// Load a specific shark's mask and compute mouth/tail positions
+async function loadSharkMask(sharkFilename: string): Promise<void> {
+  if (sharkMasks.has(sharkFilename)) return; // already loaded
+
+  try {
+    // Mask files are lowercase, PNG files are capitalized
+    const baseName = sharkFilename.replace('.png', '.txt').toLowerCase();
+    const maskPath = path.join('server', 'sharks', baseName);
+    const txt = await fsp.readFile(maskPath, 'utf8');
+    const mask = parseBinaryMask(txt, SHARK_MASK_SIZE, SHARK_MASK_SIZE);
+    sharkMasks.set(sharkFilename, mask);
+
+    // Compute mouth and tail positions
+    try {
+      const mouth = computeMouthAnchorFromMask(mask, SHARK_MASK_SIZE);
+      sharkMouthOffsets.set(sharkFilename, {
+        x: mouth.x - (SHARK_MASK_SIZE / 2),
+        y: mouth.y - (SHARK_MASK_SIZE / 2)
+      });
+    } catch (e) {
+      console.warn(`Failed to compute mouth for ${sharkFilename}`, e);
+      sharkMouthOffsets.set(sharkFilename, { x: MOUTH_OFFSET_X, y: MOUTH_OFFSET_Y });
+    }
+
+    try {
+      const tail = computeTailAnchorFromMask(mask, SHARK_MASK_SIZE);
+      sharkTailOffsets.set(sharkFilename, {
+        x: tail.x - (SHARK_MASK_SIZE / 2),
+        y: tail.y - (SHARK_MASK_SIZE / 2)
+      });
+    } catch (e) {
+      console.warn(`Failed to compute tail for ${sharkFilename}`, e);
+      // Default tail to opposite side of mouth
+      const mouth = sharkMouthOffsets.get(sharkFilename) || { x: MOUTH_OFFSET_X, y: MOUTH_OFFSET_Y };
+      sharkTailOffsets.set(sharkFilename, { x: -mouth.x, y: mouth.y });
+    }
+
+    console.log(`Loaded mask for ${sharkFilename}`);
+  } catch (e) {
+    console.error(`Failed to load mask for ${sharkFilename}`, e);
+    // Use baby shark as fallback
+    if (sharkMask) {
+      sharkMasks.set(sharkFilename, sharkMask);
+      sharkMouthOffsets.set(sharkFilename, { x: MOUTH_OFFSET_X, y: MOUTH_OFFSET_Y });
+      const mouth = sharkMouthOffsets.get(sharkFilename) || { x: MOUTH_OFFSET_X, y: MOUTH_OFFSET_Y };
+      sharkTailOffsets.set(sharkFilename, { x: -mouth.x, y: mouth.y });
+    }
+  }
+}
+
+// Get mask for a player's current shark type
+function getPlayerMask(player: Player): Uint8Array | null {
+  const mask = sharkMasks.get(player.sharkType);
+  return mask || sharkMask; // fallback to baby shark
+}
+
 async function loadServerMasks(): Promise<void> {
   try {
     const sharkTxt = await fsp.readFile('server/sharks/baby shark.txt', 'utf8');
@@ -170,56 +322,129 @@ async function loadServerMasks(): Promise<void> {
 }
 
 function pixelPerfectOverlap(me: Player, food: Food): boolean {
-  if (!sharkMask || !foodMask) return false;
-  // Coarse prune
-  const cx = me.x + PLAYER_RADIUS, cy = me.y + PLAYER_RADIUS;
+  const playerMask = getPlayerMask(me);
+  if (!playerMask || !foodMask) return false;
+
+  // Coarse prune with per-shark scale
+  const sf = getSharkScaleForType(me.sharkType);
+  const effR = PLAYER_RADIUS * sf;
+  const cx = me.x + effR, cy = me.y + effR;
   const dx = cx - food.x, dy = cy - food.y;
-  const maxR = PLAYER_RADIUS + FOOD_HALF + 16;
+  const maxR = effR + FOOD_HALF + 20;
   if ((dx*dx + dy*dy) > (maxR*maxR)) return false;
 
-  // Align with client visual: rotate(a+PI) then apply quadrant-based vertical flip
+  // Match client rendering: rotate(angle + PI) then scaleY(flipY)
   const a = me.angle;
-  let deg = (a * 180 / Math.PI) % 360; if (deg < 0) deg += 360;
+  let deg = (a * 180 / Math.PI) % 360;
+  if (deg < 0) deg += 360;
   const flipY = (deg > 270 || deg < 90) ? -1 : 1;
 
   const rot = a + Math.PI;
-  const cos = Math.cos(rot), sin = Math.sin(rot);
+  const cosInv = Math.cos(-rot), sinInv = Math.sin(-rot);
+  const scale = SHARK_SCALE * sf;
 
-  // Iterate food pixels in local food space (dst size)
+  // Iterate food pixels and check if they hit shark mask
   for (let fy = 0; fy < FOOD_SIZE; fy++) {
     for (let fx = 0; fx < FOOD_SIZE; fx++) {
       if (foodMask[fy * FOOD_SIZE + fx] === 0) continue;
-      const wx = food.x - FOOD_HALF + fx + 0.5;
-      const wy = food.y - FOOD_HALF + fy + 0.5;
-      const vx = wx - cx, vy = wy - cy;
-      // rotate into shark-local (-rot) and apply flipY to match CSS scaleY on client
-      const lx = vx * cos + vy * sin;
-      const ly = (-vx * sin + vy * cos) * flipY;
-      // Scale to mask space (mask is 256x256, shark renders at 171x171)
-      const sx = Math.round((lx / SHARK_SCALE) + (SHARK_MASK_SIZE / 2));
-      const sy = Math.round((ly / SHARK_SCALE) + (SHARK_MASK_SIZE / 2));
-      if (sx < 0 || sy < 0 || sx >= SHARK_MASK_SIZE || sy >= SHARK_MASK_SIZE) continue;
-      const idx = sy * SHARK_MASK_SIZE + sx;
-      if (sharkMask[idx] !== 0) return true;
-      // 5x5 kernel for better collision detection with scaled sprites
-      for (let oy = -2; oy <= 2; oy++) {
-        for (let ox = -2; ox <= 2; ox++) {
-          const x = sx + ox, y = sy + oy;
-          if (x < 0 || y < 0 || x >= SHARK_MASK_SIZE || y >= SHARK_MASK_SIZE) continue;
-          if (sharkMask[y * SHARK_MASK_SIZE + x] !== 0) return true;
+
+      // Food pixel world position (center of pixel)
+      const wx = food.x + fx + 0.5;
+      const wy = food.y + fy + 0.5;
+
+      // Translate to shark-local space
+      const vx = wx - cx;
+      const vy = wy - cy;
+
+      // Apply inverse rotation
+      const rx = cosInv * vx - sinInv * vy;
+      const ry = sinInv * vx + cosInv * vy;
+
+      // Apply inverse flip
+      const lx = rx;
+      const ly = ry * flipY;
+
+      // Convert to mask coordinates
+      const mx = (lx / scale) + (SHARK_MASK_SIZE / 2);
+      const my = (ly / scale) + (SHARK_MASK_SIZE / 2);
+
+      // Check center pixel
+      const mxi = Math.round(mx);
+      const myi = Math.round(my);
+      if (mxi >= 0 && myi >= 0 && mxi < SHARK_MASK_SIZE && myi < SHARK_MASK_SIZE) {
+        if (playerMask[myi * SHARK_MASK_SIZE + mxi] !== 0) return true;
+      }
+
+      // Check 3x3 neighborhood for sub-pixel accuracy
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const tx = mxi + dx;
+          const ty = myi + dy;
+          if (tx >= 0 && ty >= 0 && tx < SHARK_MASK_SIZE && ty < SHARK_MASK_SIZE) {
+            if (playerMask[ty * SHARK_MASK_SIZE + tx] !== 0) return true;
+          }
         }
       }
     }
   }
+
   return false;
+}
+
+// Check if player leveled up and handle evolution
+async function checkAndHandleEvolution(player: Player): Promise<void> {
+  const oldLevel = player.level || 1;
+  const newLevel = computeLevel(player.score);
+
+  if (newLevel > oldLevel) {
+    player.level = newLevel;
+    const newSharkType = getSharkTypeForLevel(newLevel);
+
+    // Check if shark type changed (evolution every 5 levels)
+    if (newSharkType !== player.sharkType) {
+      const oldSharkType = player.sharkType;
+      player.sharkType = newSharkType;
+
+      // Load the new shark's mask if not already loaded
+      await loadSharkMask(newSharkType);
+
+      console.log(`Player ${player.username} evolved from ${oldSharkType} to ${newSharkType} at level ${newLevel}`);
+
+      // Get tail offset for client-side trail bubbles
+      const tailOffset = sharkTailOffsets.get(newSharkType) || { x: -MOUTH_OFFSET_X, y: MOUTH_OFFSET_Y };
+
+      // Emit smoke particle explosion effect to all clients (server-authoritative)
+      io.emit('effect:smoke', {
+        x: player.x,
+        y: player.y,
+        playerId: player.id,
+        s: getSharkScaleForType(newSharkType)
+      });
+
+      // Emit evolution event to all clients
+      io.emit('player:evolved', {
+        id: player.id,
+        username: player.username,
+        level: newLevel,
+        sharkType: newSharkType,
+        x: player.x,
+        y: player.y,
+        tailOffset: tailOffset
+      });
+    }
+  }
 }
 
 function handleConsume(me: Player, food: Food) {
   delete gameState.foods[food.id];
-  me.score = (me.score || 0) + 5;
+  const oldScore = me.score || 0;
+  me.score = oldScore + 5;
   const newFood = spawnFoodDistributed();
   dirty = true;
   io.emit('food:respawn', { removedId: food.id, food: newFood });
+
+  // Check for level-up/evolution
+  checkAndHandleEvolution(me).catch(err => console.error('Evolution check failed:', err));
 }
 
 const FOOD_TARGET_COUNT = 125;
@@ -292,11 +517,13 @@ function spawnFoodDistributed(tries = 20): Food {
 }
 
 function bubbleHitsShark(p: Player, bx: number, by: number): boolean {
-  if (!sharkMask) return false;
-  // Coarse prune by radius to avoid heavy math when far
-  const cx = p.x + PLAYER_RADIUS, cy = p.y + PLAYER_RADIUS;
+  const playerMask = getPlayerMask(p);
+  if (!playerMask) return false;
+  // Coarse prune by radius to avoid heavy math when far (respect per-shark scale)
+  const sf = getSharkScaleForType(p.sharkType);
+  const cx = p.x + PLAYER_RADIUS * sf, cy = p.y + PLAYER_RADIUS * sf;
   const dx = bx - cx, dy = by - cy;
-  const maxR = PLAYER_RADIUS + 8; // increased slack for better edge detection
+  const maxR = PLAYER_RADIUS * sf + 8; // increased slack for better edge detection
   if ((dx * dx + dy * dy) > (maxR * maxR)) return false;
 
   // Inverse of the visual transform applied on client: rotate(a+PI) then flipY based on quadrant
@@ -310,12 +537,13 @@ function bubbleHitsShark(p: Player, bx: number, by: number): boolean {
   const ry = s * dx + c * dy;
   const lx = rx;
   const ly = ry * flipY;
-  // Map to mask pixel coordinates (scale to mask space)
-  const ux = Math.round((lx / SHARK_SCALE) + (SHARK_MASK_SIZE / 2));
-  const uy = Math.round((ly / SHARK_SCALE) + (SHARK_MASK_SIZE / 2));
+  // Map to mask pixel coordinates (scale to mask space with visual scale s)
+  const scale = SHARK_SCALE * sf;
+  const ux = Math.round((lx / scale) + (SHARK_MASK_SIZE / 2));
+  const uy = Math.round((ly / scale) + (SHARK_MASK_SIZE / 2));
   if (ux < 0 || uy < 0 || ux >= SHARK_MASK_SIZE || uy >= SHARK_MASK_SIZE) return false;
   const idx = uy * SHARK_MASK_SIZE + ux;
-  if (sharkMask[idx] !== 0) return true;
+  if (playerMask[idx] !== 0) return true;
 
   // Enhanced 7x7 kernel for better collision detection with scaled sprites and moving bullets
   // This ensures we catch bullets that hit any colored pixel of the shark
@@ -323,7 +551,7 @@ function bubbleHitsShark(p: Player, bx: number, by: number): boolean {
     for (let ox = -3; ox <= 3; ox++) {
       const x = ux + ox, y = uy + oy;
       if (x < 0 || y < 0 || x >= SHARK_MASK_SIZE || y >= SHARK_MASK_SIZE) continue;
-      if (sharkMask[y * SHARK_MASK_SIZE + x] !== 0) return true;
+      if (playerMask[y * SHARK_MASK_SIZE + x] !== 0) return true;
     }
   }
 
@@ -338,7 +566,94 @@ function bubbleHitsShark(p: Player, bx: number, by: number): boolean {
     const sx = ux + offset.dx;
     const sy = uy + offset.dy;
     if (sx < 0 || sy < 0 || sx >= SHARK_MASK_SIZE || sy >= SHARK_MASK_SIZE) continue;
-    if (sharkMask[sy * SHARK_MASK_SIZE + sx] !== 0) return true;
+    if (playerMask[sy * SHARK_MASK_SIZE + sx] !== 0) return true;
+  }
+
+  return false;
+}
+
+// Pixel-perfect shark-to-shark collision detection
+function sharkCollidesWithShark(shark1: Player, shark2: Player): boolean {
+  const mask1 = getPlayerMask(shark1);
+  const mask2 = getPlayerMask(shark2);
+  if (!mask1 || !mask2) return false;
+
+  // Coarse prune: check if bounding circles overlap (respect per-shark scale)
+  const sf1 = getSharkScaleForType(shark1.sharkType);
+  const sf2 = getSharkScaleForType(shark2.sharkType);
+  const cx1 = shark1.x + PLAYER_RADIUS * sf1, cy1 = shark1.y + PLAYER_RADIUS * sf1;
+  const cx2 = shark2.x + PLAYER_RADIUS * sf2, cy2 = shark2.y + PLAYER_RADIUS * sf2;
+  const dx = cx2 - cx1, dy = cy2 - cy1;
+  const maxR = PLAYER_RADIUS * (sf1 + sf2);
+  if ((dx * dx + dy * dy) > (maxR * maxR)) return false;
+
+  // Setup transforms for both sharks
+  const a1 = shark1.angle;
+  let deg1 = (a1 * 180 / Math.PI) % 360; if (deg1 < 0) deg1 += 360;
+  const flipY1 = (deg1 > 270 || deg1 < 90) ? -1 : 1;
+  const rot1 = a1 + Math.PI;
+  const cos1Inv = Math.cos(-rot1), sin1Inv = Math.sin(-rot1);
+  const scale1 = SHARK_SCALE * sf1;
+
+  const a2 = shark2.angle;
+  let deg2 = (a2 * 180 / Math.PI) % 360; if (deg2 < 0) deg2 += 360;
+  const flipY2 = (deg2 > 270 || deg2 < 90) ? -1 : 1;
+  const rot2 = a2 + Math.PI;
+  const cos2 = Math.cos(rot2), sin2 = Math.sin(rot2);
+  const scale2 = SHARK_SCALE * sf2;
+
+  // Adaptive sampling: denser for larger sharks
+  const maxScale = Math.max(sf1, sf2);
+  const step = maxScale > 1.3 ? 1 : (maxScale > 1.2 ? 2 : (maxScale > 1.1 ? 3 : 4));
+
+  // Sample shark2's mask pixels and check against shark1
+  for (let my = 0; my < SHARK_MASK_SIZE; my += step) {
+    for (let mx = 0; mx < SHARK_MASK_SIZE; mx += step) {
+      if (mask2[my * SHARK_MASK_SIZE + mx] === 0) continue;
+
+      // Convert shark2 mask coords to local coords
+      const lx2 = (mx - SHARK_MASK_SIZE / 2) * scale2;
+      const ly2 = (my - SHARK_MASK_SIZE / 2) * scale2;
+
+      // Apply shark2's flip and rotation to get world position
+      const ly2_flipped = ly2 * flipY2;
+      const wx = cx2 + (lx2 * cos2 - ly2_flipped * sin2);
+      const wy = cy2 + (lx2 * sin2 + ly2_flipped * cos2);
+
+      // Transform world point to shark1's local space
+      const vx = wx - cx1;
+      const vy = wy - cy1;
+
+      // Apply inverse rotation for shark1
+      const rx1 = cos1Inv * vx - sin1Inv * vy;
+      const ry1 = sin1Inv * vx + cos1Inv * vy;
+
+      // Apply inverse flip for shark1
+      const lx1 = rx1;
+      const ly1 = ry1 * flipY1;
+
+      // Convert to shark1's mask coordinates
+      const mx1 = (lx1 / scale1) + (SHARK_MASK_SIZE / 2);
+      const my1 = (ly1 / scale1) + (SHARK_MASK_SIZE / 2);
+
+      // Check center pixel
+      const mx1i = Math.round(mx1);
+      const my1i = Math.round(my1);
+      if (mx1i >= 0 && my1i >= 0 && mx1i < SHARK_MASK_SIZE && my1i < SHARK_MASK_SIZE) {
+        if (mask1[my1i * SHARK_MASK_SIZE + mx1i] !== 0) return true;
+      }
+
+      // Check 3x3 neighborhood for sub-pixel accuracy
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const tx = mx1i + dx;
+          const ty = my1i + dy;
+          if (tx >= 0 && ty >= 0 && tx < SHARK_MASK_SIZE && ty < SHARK_MASK_SIZE) {
+            if (mask1[ty * SHARK_MASK_SIZE + tx] !== 0) return true;
+          }
+        }
+      }
+    }
   }
 
   return false;
@@ -414,10 +729,18 @@ function handleDeathAndAwards(victim: Player, killerId: string, now: number) {
 
   // Apply gains
   const killer = gameState.players[killerId];
-  if (killer && killerGain > 0) { killer.score = (killer.score || 0) + killerGain; }
+  if (killer && killerGain > 0) {
+    killer.score = (killer.score || 0) + killerGain;
+    // Check for evolution
+    checkAndHandleEvolution(killer).catch(err => console.error('Evolution check failed:', err));
+  }
   if (assisterId) {
     const assister = gameState.players[assisterId];
-    if (assister && assistGain > 0) assister.score = (assister.score || 0) + assistGain;
+    if (assister && assistGain > 0) {
+      assister.score = (assister.score || 0) + assistGain;
+      // Check for evolution
+      checkAndHandleEvolution(assister).catch(err => console.error('Evolution check failed:', err));
+    }
   }
 
   // Emit kill feed + personal notifications
@@ -499,8 +822,11 @@ io.on('connection', (socket) => {
 
     // Initialize new player
     socket.on('player:join', (username: string) => {
+        // Validate and sanitize username (max 20 characters for in-game names)
+        const sanitizedUsername = (username || 'Player').trim().slice(0, 20);
+
         // Spawn players in the center area of the map (avoid borders for better camera view)
-        usernames.set(socket.id, username);
+        usernames.set(socket.id, sanitizedUsername);
 
         // Center spawn area: middle 60% of the map (20% margin from each edge)
         const spawnMargin = MAP_SIZE * 0.2;
@@ -512,13 +838,15 @@ io.on('connection', (socket) => {
             x: spawnMargin + Math.random() * spawnWidth,
             y: spawnMargin + Math.random() * spawnHeight,
             angle: 0,
-            username,
+            username: sanitizedUsername,
             score: 0,
             hp: 100,
             dead: false,
+            level: 1,
+            sharkType: 'Baby Shark.png',
         };
 
-        console.log(`Player ${username} spawned at (${gameState.players[socket.id].x}, ${gameState.players[socket.id].y})`);
+        console.log(`Player ${sanitizedUsername} spawned at (${gameState.players[socket.id].x}, ${gameState.players[socket.id].y})`);
 
         // Send current game state to the new player (include server timestamp for smoother client interpolation)
 
@@ -544,6 +872,18 @@ io.on('connection', (socket) => {
         socket.broadcast.emit('player:new', gameState.players[socket.id]);
         // Send level steps to the new player (client computes progress locally)
         if (LEVEL_STEPS.length > 0) socket.emit('levels:init', LEVEL_STEPS);
+
+        // Send precomputed tail offsets and visual scales for all sharks
+        try {
+          const tails: Record<string, { x: number; y: number; s: number }> = {};
+          for (const [type, off] of sharkTailOffsets.entries()) {
+            tails[type] = { x: off.x, y: off.y, s: getSharkScaleForType(type) };
+          }
+          socket.emit('tails:init', tails);
+        } catch (e) {
+          console.warn('Failed to emit tails:init', e);
+        }
+
     });
 
     // Update player position and rotation
@@ -551,8 +891,10 @@ io.on('connection', (socket) => {
         const me = gameState.players[socket.id];
         if (me) {
             // Clamp coordinates to map boundaries (top-left of shark; keep full sprite in-bounds)
-            const clampedX = Math.max(0, Math.min(MAP_SIZE - SHARK_SIZE, x));
-            const clampedY = Math.max(0, Math.min(MAP_SIZE - SHARK_SIZE, y));
+            const s = getSharkScaleForType(me.sharkType);
+            const effSize = Math.round(SHARK_SIZE * s);
+            const clampedX = Math.max(0, Math.min(MAP_SIZE - effSize, x));
+            const clampedY = Math.max(0, Math.min(MAP_SIZE - effSize, y));
 
             // Server-authoritative speed cap to prevent teleport/speed hacks
             const now = Date.now();
@@ -572,6 +914,127 @@ io.on('connection', (socket) => {
                 ny = prev.y + dy * k;
             }
 
+            // Check if new position would collide with any other shark
+            // If so, block the movement (sharks are solid objects)
+            if (sharkMask) {
+                const tempPlayer = { ...me, x: nx, y: ny, angle };
+                let blocked = false;
+                let hitOther: Player | null = null;
+
+                for (const other of Object.values(gameState.players)) {
+                    if (other.id === socket.id || other.dead) continue;
+                    if (sharkCollidesWithShark(tempPlayer, other)) {
+                        blocked = true;
+                        hitOther = other;
+                        break;
+                    }
+                }
+
+                // If movement is blocked, apply a two-sided knockback (no cooldown) and ensure separation
+                if (blocked && hitOther) {
+                    const sfMe = getSharkScaleForType(me.sharkType);
+                    const sfOt = getSharkScaleForType(hitOther.sharkType);
+                    const effSizeMe = Math.round(SHARK_SIZE * sfMe);
+                    const effSizeOt = Math.round(SHARK_SIZE * sfOt);
+                    const cxMe = me.x + PLAYER_RADIUS * sfMe;
+                    const cyMe = me.y + PLAYER_RADIUS * sfMe;
+                    const cxOt = hitOther.x + PLAYER_RADIUS * sfOt;
+                    const cyOt = hitOther.y + PLAYER_RADIUS * sfOt;
+                    let dxk = cxMe - cxOt;
+                    let dyk = cyMe - cyOt;
+                    const len = Math.hypot(dxk, dyk) || 1;
+                    dxk /= len; dyk /= len;
+                    const sAvg = (sfMe + sfOt) / 2;
+                    const KB = Math.round(70 * sAvg); // reduced knockback
+
+                    // Initial symmetric push
+                    let nx0 = Math.max(0, Math.min(MAP_SIZE - effSizeMe, me.x + dxk * KB));
+                    let ny0 = Math.max(0, Math.min(MAP_SIZE - effSizeMe, me.y + dyk * KB));
+                    let ox0 = Math.max(0, Math.min(MAP_SIZE - effSizeOt, hitOther.x - dxk * KB));
+                    let oy0 = Math.max(0, Math.min(MAP_SIZE - effSizeOt, hitOther.y - dyk * KB));
+
+                    // Ensure at least circle separation to avoid lingering overlap
+                    let ncx = nx0 + PLAYER_RADIUS * sfMe, ncy = ny0 + PLAYER_RADIUS * sfMe;
+                    let ocx = ox0 + PLAYER_RADIUS * sfOt, ocy = oy0 + PLAYER_RADIUS * sfOt;
+                    let sdx = ncx - ocx, sdy = ncy - ocy;
+                    let dist = Math.hypot(sdx, sdy) || 1;
+                    const target = PLAYER_RADIUS * sfMe + PLAYER_RADIUS * sfOt + 1; // +1px margin
+                    if (dist < target) {
+                        const need = (target - dist) / 2;
+                        sdx /= dist; sdy /= dist;
+                        nx0 = Math.max(0, Math.min(MAP_SIZE - effSizeMe, nx0 + sdx * need));
+                        ny0 = Math.max(0, Math.min(MAP_SIZE - effSizeMe, ny0 + sdy * need));
+                        ox0 = Math.max(0, Math.min(MAP_SIZE - effSizeOt, ox0 - sdx * need));
+                        oy0 = Math.max(0, Math.min(MAP_SIZE - effSizeOt, oy0 - sdy * need));
+                    }
+
+                    nx = nx0; ny = ny0;
+                    hitOther.x = ox0; hitOther.y = oy0;
+
+                    // Avoid speed-limit rubberband for the other player by updating their last known server pos/time
+                    lastPos.set(hitOther.id, { x: hitOther.x, y: hitOther.y });
+                    lastUpdate.set(hitOther.id, now);
+
+
+                    // Apply collision damage to both sharks (no cooldown)
+                    me.hp = Math.max(0, (me.hp ?? 100) - SHARK_COLLISION_DAMAGE);
+                    hitOther.hp = Math.max(0, (hitOther.hp ?? 100) - SHARK_COLLISION_DAMAGE);
+
+                    console.log(`Collision: ${me.username} (${me.hp}HP) <-> ${hitOther.username} (${hitOther.hp}HP)`);
+
+                    // Record damage for kill/assist tracking
+                    recordDamage(me.id, hitOther.id, SHARK_COLLISION_DAMAGE, now);
+                    recordDamage(hitOther.id, me.id, SHARK_COLLISION_DAMAGE, now);
+
+                    // Emit collision event to both players for visual effects
+                    const meSock = io.sockets.sockets.get(me.id);
+                    const otherSock = io.sockets.sockets.get(hitOther.id);
+                    if (meSock) meSock.emit('shark:collision', { damage: SHARK_COLLISION_DAMAGE });
+                    if (otherSock) otherSock.emit('shark:collision', { damage: SHARK_COLLISION_DAMAGE });
+
+                    dirty = true; // HP changed, need to broadcast
+
+                    // Check for deaths
+                    if (me.hp <= 0 && !me.dead) {
+                        me.dead = true;
+                        const s = io.sockets.sockets.get(me.id);
+                        s?.emit('player:died');
+                        try { handleDeathAndAwards(me, hitOther.id, now); } catch {}
+                        // Remove bubbles and state
+                        for (const bid of Object.keys(bubbles)) {
+                            if (bubbles[Number(bid)]?.ownerId === me.id) { delete bubbles[Number(bid)]; projDirty = true; }
+                        }
+                        lastShotAt.delete(me.id);
+                        lastUpdate.delete(me.id);
+                        lastPos.delete(me.id);
+                        setTimeout(() => {
+                            delete gameState.players[me.id];
+                            io.emit('player:left', me.id);
+                        }, 1200);
+                    }
+                    if (hitOther.hp <= 0 && !hitOther.dead) {
+                        hitOther.dead = true;
+                        const s = io.sockets.sockets.get(hitOther.id);
+                        s?.emit('player:died');
+                        try { handleDeathAndAwards(hitOther, me.id, now); } catch {}
+                        // Remove bubbles and state
+                        for (const bid of Object.keys(bubbles)) {
+                            if (bubbles[Number(bid)]?.ownerId === hitOther.id) { delete bubbles[Number(bid)]; projDirty = true; }
+                        }
+                        lastShotAt.delete(hitOther.id);
+                        lastUpdate.delete(hitOther.id);
+                        lastPos.delete(hitOther.id);
+                        setTimeout(() => {
+                            delete gameState.players[hitOther.id];
+                            io.emit('player:left', hitOther.id);
+                        }, 1200);
+                    }
+                } else if (blocked) {
+                    // Blocked but no hitOther (shouldn't happen, but handle gracefully)
+                    nx = me.x; ny = me.y;
+                }
+            }
+
             me.x = nx;
             me.y = ny;
             me.angle = angle;
@@ -581,9 +1044,6 @@ io.on('connection', (socket) => {
 
             // Movement update complete; mark dirty for broadcast
             dirty = true;
-
-        // Latency probe
-        socket.on('client:ping', (t0: number) => { socket.emit('server:pong', t0); });
 
         }
     });
@@ -604,6 +1064,56 @@ io.on('connection', (socket) => {
             }
         });
 
+        // Developer testing feature: z key grants +1 level (WarriorX12 only)
+        socket.on('dev:levelup', () => {
+            const me = gameState.players[socket.id];
+            if (!me || me.dead) return;
+
+            // Restrict to WarriorX12 only
+            if (me.username !== 'WarriorX12') {
+                console.log(`Unauthorized levelup attempt by ${me.username}`);
+                return;
+            }
+
+            const oldLevel = me.level || 1;
+            const newLevel = Math.min(100, oldLevel + 1);
+            me.level = newLevel;
+
+            // Update score to match the new level
+            let totalXP = 0;
+            for (let i = 0; i < newLevel - 1 && i < LEVEL_STEPS.length; i++) {
+                totalXP += LEVEL_STEPS[i];
+            }
+            me.score = totalXP;
+
+            // Check for evolution
+            const newSharkType = getSharkTypeForLevel(newLevel);
+            if (newSharkType !== me.sharkType) {
+                me.sharkType = newSharkType;
+                loadSharkMask(newSharkType).catch(err => console.error('Failed to load shark mask:', err));
+
+                // Get tail offset for client-side trail bubbles
+                const tailOffset = sharkTailOffsets.get(newSharkType) || { x: -MOUTH_OFFSET_X, y: MOUTH_OFFSET_Y };
+
+                // Emit server-authoritative smoke effect visible to all
+                io.emit('effect:smoke', { x: me.x, y: me.y, playerId: me.id, s: getSharkScaleForType(newSharkType) });
+
+                // Emit evolution event (with tail offset)
+                io.emit('player:evolved', {
+                    id: me.id,
+                    username: me.username,
+                    level: newLevel,
+                    sharkType: newSharkType,
+                    x: me.x,
+                    y: me.y,
+                    tailOffset
+                });
+            }
+
+            dirty = true;
+            console.log(`Dev levelup: ${me.username} is now level ${newLevel} (${me.sharkType})`);
+        });
+
 
 
     // Client requests to shoot toward a world-space target (server-authoritative)
@@ -621,19 +1131,52 @@ io.on('connection', (socket) => {
         }
 
         lastShotAt.set(socket.id, now);
+
         // Spawn bubble at mouth offset rotated by (angle + 180deg)
-        // Note: MOUTH_OFFSET is in mask space, scale to render space
+        // Get mouth offset for current shark type
+        const mouthOffset = sharkMouthOffsets.get(me.sharkType) || { x: MOUTH_OFFSET_X, y: MOUTH_OFFSET_Y };
         const rot = me.angle + Math.PI;
         const cos = Math.cos(rot), sin = Math.sin(rot);
-        const cx = me.x + PLAYER_RADIUS, cy = me.y + PLAYER_RADIUS;
-        const mouthX = MOUTH_OFFSET_X * SHARK_SCALE; // Scale from mask to render space
-        const mouthY = MOUTH_OFFSET_Y * SHARK_SCALE;
+        const sf = getSharkScaleForType(me.sharkType);
+        const cx = me.x + PLAYER_RADIUS * sf, cy = me.y + PLAYER_RADIUS * sf;
+
+        // Account for horizontal flip when shark is facing right
+        const a = me.angle;
+        let deg = (a * 180 / Math.PI) % 360;
+        if (deg < 0) deg += 360;
+        const flipY = (deg > 270 || deg < 90) ? -1 : 1; // right-facing quadrants => flip
+
+        // Apply flip to mouth Y offset (X stays the same)
+        const mouthX = mouthOffset.x * SHARK_SCALE * sf;
+        const mouthY = mouthOffset.y * SHARK_SCALE * sf * flipY; // Apply flip to Y
+
+        // Calculate mouth position in world space
         const sx = cx + (mouthX * cos + mouthY * -sin);
         const sy = cy + (mouthX * sin + mouthY * cos);
+
+        // Calculate direction from mouth to target
         const dx = (tx - sx), dy = (ty - sy);
-        const inv = 1 / (Math.hypot(dx, dy) || 1);
-        const vx = dx * inv * BUBBLE_SPEED;
-        const vy = dy * inv * BUBBLE_SPEED;
+        const targetAngle = Math.atan2(dy, dx);
+
+        // Implement firing arc constraint: bullets can only fire within ±90° of shark's forward direction
+        // Shark's forward direction is me.angle
+        let angleDiff = targetAngle - me.angle;
+        // Normalize angle difference to [-PI, PI]
+        while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+        while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+
+        // If cursor is outside ±90° arc, clamp to nearest valid angle
+        const maxAngleDiff = Math.PI / 2; // 90 degrees
+        let finalAngle = targetAngle;
+        if (Math.abs(angleDiff) > maxAngleDiff) {
+            // Clamp to the nearest edge of the firing arc
+            finalAngle = me.angle + (angleDiff > 0 ? maxAngleDiff : -maxAngleDiff);
+        }
+
+        // Calculate velocity using the final angle
+        const vx = Math.cos(finalAngle) * BUBBLE_SPEED;
+        const vy = Math.sin(finalAngle) * BUBBLE_SPEED;
+
         const id = nextBubbleId++;
         bubbles[id] = { id, ownerId: socket.id, x: sx, y: sy, vx, vy, expireAt: now + BUBBLE_TTL_MS };
     });
@@ -667,6 +1210,8 @@ io.on('connection', (socket) => {
             score: 0,
             hp: 100,
             dead: false,
+            level: 1,
+            sharkType: 'Baby Shark.png',
         } as Player;
         lastUpdate.set(socket.id, Date.now());
         lastPos.set(socket.id, { x: me.x, y: me.y });
@@ -786,6 +1331,9 @@ setInterval(() => {
       projDirty = false;
     }
 
+    // Shark-to-shark collision is now handled in player:move to prevent overlap
+    // No need for post-movement collision detection since movement is blocked
+
     // Update fish food wander and emit positions at a modest cadence
     const foodUpdates = updateFoods(dt);
     foodsEmitAccum += TICK_MS;
@@ -821,19 +1369,41 @@ setInterval(() => {
 
 
 
+// Preload all shark masks at startup for better performance
+async function preloadAllSharkMasks(): Promise<void> {
+  if (!SHARK_EVOLUTIONS || SHARK_EVOLUTIONS.length === 0) {
+    console.warn('No shark evolutions loaded, skipping mask preload');
+    return;
+  }
+
+  console.log('Preloading all shark masks...');
+  for (const sharkType of SHARK_EVOLUTIONS) {
+    try {
+      await loadSharkMask(sharkType);
+    } catch (e) {
+      console.error(`Failed to preload mask for ${sharkType}:`, e);
+    }
+  }
+  console.log(`Preloaded ${sharkMasks.size} shark masks`);
+}
+
 // Kick off server-side mask loading and continuous collision checks
 loadServerMasks().catch(() => {});
 loadLevelProgression().catch(() => {});
+loadSharkEvolutions()
+  .then(() => preloadAllSharkMasks())
+  .catch(() => {});
 
 setInterval(() => {
   if (!sharkMask || !foodMask) return;
   const foodsArr = Object.values(gameState.foods);
   if (foodsArr.length === 0) return;
   for (const me of Object.values(gameState.players)) {
-    const cx = me.x + PLAYER_RADIUS, cy = me.y + PLAYER_RADIUS;
+    const sf = getSharkScaleForType(me.sharkType);
+    const cx = me.x + PLAYER_RADIUS * sf, cy = me.y + PLAYER_RADIUS * sf;
     for (const food of foodsArr) {
       const dx = cx - food.x, dy = cy - food.y;
-      const maxR = PLAYER_RADIUS + FOOD_HALF + 16;
+      const maxR = PLAYER_RADIUS * sf + FOOD_HALF + 16;
       if ((dx*dx + dy*dy) > (maxR*maxR)) continue;
       if (pixelPerfectOverlap(me, food)) {
         if (!gameState.foods[food.id]) continue;
@@ -845,11 +1415,29 @@ setInterval(() => {
 
 
 // Use environment PORT for production (Render.com), fallback to 3002 for local dev
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3002;
+const envPort = process.env.PORT;
+const PORT = envPort ? parseInt(envPort as string, 10) : 3002;
 const HOST = process.env.HOST || '0.0.0.0';
 
+httpServer.on('error', (err) => {
+  console.error('httpServer error:', err);
+});
+
+io.on('error', (err) => {
+  console.error('Socket.IO error:', err);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection:', reason);
+});
+
+console.log(`Attempting to listen on ${HOST}:${PORT}...`);
 httpServer.listen(PORT, HOST, () => {
-    console.log(`Game server running on ${HOST}:${PORT}`);
-    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`Map size: ${MAP_SIZE}x${MAP_SIZE} pixels`);
+  console.log(`✓ Game server running on ${HOST}:${PORT}`);
+  console.log(`✓ Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`✓ Map size: ${MAP_SIZE}x${MAP_SIZE} pixels`);
+  console.log(`✓ Socket.IO ready for connections`);
 });

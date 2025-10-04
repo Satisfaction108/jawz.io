@@ -4,7 +4,7 @@ const SELF_SPEED = 495; // px/s (1.5x boost)
 const SHARK_SIZE = Math.round(256 * (2 / 3)); // px (2/3 of original 256px = ~171px)
 const SHARK_HALF = SHARK_SIZE / 2;
 const SHARK_MASK_SIZE = 256; // Original mask size (masks are still 256x256)
-const SHARK_SCALE = SHARK_SIZE / SHARK_MASK_SIZE; // Scale factor for collision detection (2/3)
+const SHARK_SCALE = SHARK_SIZE / SHARK_MASK_SIZE; // Base scale (2/3)
 const CAMERA_ZOOM = 0.8; // wider FOV (1.0 = no zoom)
 // Visual constants
 const BUBBLE_SIZE = 50; // base reference for gameplay-related sizes
@@ -104,11 +104,11 @@ function markSharkHit(id) {
     el.classList.add('shark--hit');
     setTimeout(() => el.classList.remove('shark--hit'), 140);
 }
-function spawnTrailBubbleAt(x, y, angle) {
+function spawnTrailBubbleAt(x, y, angle, sharkType) {
     if (!FX.waterTrail || activeTrailBubbles >= MAX_TRAIL_BUBBLES)
         return;
-    // Spawn 2-3 bubbles spread across the tail for a fuller wake effect
-    const numBubbles = 2 + (Math.random() < 0.3 ? 1 : 0); // 2-3 bubbles
+    // Always spawn exactly 1 bubble from the exact center of the tail
+    const numBubbles = 1;
     for (let i = 0; i < numBubbles; i++) {
         if (activeTrailBubbles >= MAX_TRAIL_BUBBLES)
             break;
@@ -118,41 +118,89 @@ function spawnTrailBubbleAt(x, y, angle) {
         // Compute world-space tail point by rotating a sprite-local point on the tail edge around sprite center
         const rot = angle + Math.PI; // matches sprite rotate offset
         const cos = Math.cos(rot), sin = Math.sin(rot);
+        const key = sharkType || 'Baby Shark.png';
+        const s = sharkScales.get(key) || 1;
         let lx = SHARK_HALF, ly = SHARK_HALF; // default: center (in render space)
-        // Sample different points along the tail edge for spread
-        // Note: tailEdge and tailAnchor are in mask space (256x256), need to scale to render space (171x171)
-        if (tailEdge && tailEdge.length) {
-            // Divide tail into segments and pick from different segments for spread
-            const segment = Math.floor((i / numBubbles) * tailEdge.length);
-            const segmentSize = Math.floor(tailEdge.length / numBubbles);
-            const idx = segment + Math.floor(Math.random() * segmentSize);
-            const p = tailEdge[Math.min(idx, tailEdge.length - 1)];
-            lx = p.x * SHARK_SCALE;
-            ly = p.y * SHARK_SCALE; // Scale from mask to render space
+        // Account for horizontal flip when shark is facing right
+        let deg = (angle * 180 / Math.PI) % 360;
+        if (deg < 0)
+            deg += 360;
+        const flipY = (deg > 270 || deg < 90) ? -1 : 1; // right-facing quadrants => flip
+        // Use shark-specific tail offset if available (from server)
+        const tailOffset = sharkTailOffsets.get(key);
+        if (tailOffset) {
+            // Server provides tail offset in mask space relative to center (128, 128)
+            // Convert to render space: add to center (128) then scale by base and visual scale
+            // Apply flip to Y offset
+            lx = (128 + tailOffset.x) * SHARK_SCALE * s;
+            ly = (128 + tailOffset.y * flipY) * SHARK_SCALE * s;
+        }
+        else if (tailEdge && tailEdge.length) {
+            // Fallback: use the median point along the tail edge as the center
+            const mid = tailEdge[Math.floor(tailEdge.length / 2)];
+            lx = mid.x * SHARK_SCALE * s;
+            ly = mid.y * SHARK_SCALE * s * flipY; // Apply flip
         }
         else if (tailAnchor) {
-            lx = tailAnchor.x * SHARK_SCALE;
-            ly = tailAnchor.y * SHARK_SCALE; // Scale from mask to render space
-            // Add vertical spread even without tail edge data
-            ly += (Math.random() * 13) - 6.5; // 2/3 of ±10px = ±6.5px vertical spread
+            // Fallback: use computed tail anchor from baby shark alpha
+            lx = tailAnchor.x * SHARK_SCALE * s;
+            ly = tailAnchor.y * SHARK_SCALE * s * flipY; // Apply flip
         }
-        const dx = lx - SHARK_HALF;
-        const dy = ly - SHARK_HALF;
-        const ax = x + SHARK_HALF + (dx * cos - dy * sin);
-        const ay = y + SHARK_HALF + (dx * sin + dy * cos);
-        // Emit slightly behind the facing direction with lateral spread for a fuller wake
-        const baseOff = 5 + Math.random() * 8; // 2/3 of (8..20) = 5..13 px behind
-        const spread = (Math.random() * 20) - 10; // 2/3 of ±15 = ±10 px sideways
+        const dx = lx - SHARK_HALF * s;
+        const dy = ly - SHARK_HALF * s;
+        const ax = x + SHARK_HALF * s + (dx * cos - dy * sin);
+        const ay = y + SHARK_HALF * s + (dx * sin + dy * cos);
+        // Emit slightly behind the facing direction from the exact tail center (no sideways spread)
+        const baseOff = 6 * s; // scale with shark size
         const fx = Math.cos(angle), fy = Math.sin(angle);
-        const px = -Math.sin(angle), py = Math.cos(angle);
-        const bx = ax - fx * baseOff + px * spread;
-        const by = ay - fy * baseOff + py * spread;
+        const bx = ax - fx * baseOff;
+        const by = ay - fy * baseOff;
         // Use CSS variables consumed by the animation so transform isn't overridden
         // Trail bubble is 16px, so offset by half (8px) - scaled to 2/3 = ~11px, offset by ~5px
         el.style.setProperty('--x', `${Math.round(bx - 5)}px`); // 2/3 of 8px offset
         el.style.setProperty('--y', `${Math.round(by - 5)}px`);
         world.appendChild(el);
         setTimeout(() => { el.remove(); activeTrailBubbles--; }, 900);
+    }
+}
+// Spawn evolution smoke particle explosion (Brawl Stars style)
+function spawnEvolutionSmoke(x, y, s = 1) {
+    const centerX = x + SHARK_HALF * s;
+    const centerY = y + SHARK_HALF * s;
+    // Central veil: blankets the shark to hide sprite swap
+    const veil = document.createElement('div');
+    veil.className = 'evolution-smoke-veil';
+    const veilSize = Math.round(SHARK_SIZE * 1.35 * s);
+    veil.style.width = `${veilSize}px`;
+    veil.style.height = `${veilSize}px`;
+    veil.style.left = `${centerX - veilSize / 2}px`;
+    veil.style.top = `${centerY - veilSize / 2}px`;
+    world.appendChild(veil);
+    setTimeout(() => veil.remove(), 600);
+    // Radial particles
+    const numParticles = 16; // fuller burst
+    for (let i = 0; i < numParticles; i++) {
+        const particle = document.createElement('div');
+        particle.className = 'evolution-smoke';
+        // Random angle for radial spread
+        const angle = (Math.PI * 2 * i) / numParticles + (Math.random() - 0.5) * 0.4;
+        const speed = 42 + Math.random() * 34; // ~42-76px spread
+        const offsetX = Math.cos(angle) * speed;
+        const offsetY = Math.sin(angle) * speed;
+        // Random size variation
+        const size = (18 + Math.random() * 18) * (0.85 + 0.15 * s); // scale subtly with size
+        particle.style.width = `${size}px`;
+        particle.style.height = `${size}px`;
+        // Set initial position at shark center
+        particle.style.left = `${centerX - size / 2}px`;
+        particle.style.top = `${centerY - size / 2}px`;
+        // Use CSS variables for animation
+        particle.style.setProperty('--offset-x', `${offsetX}px`);
+        particle.style.setProperty('--offset-y', `${offsetY}px`);
+        particle.style.setProperty('--rotation', `${Math.random() * 360}deg`);
+        world.appendChild(particle);
+        // Remove after animation completes
+        setTimeout(() => particle.remove(), 750);
     }
 }
 function spawnScorePopup(playerId, delta) {
@@ -362,6 +410,13 @@ let foodAlpha = null;
 let foodAlphaSize = FISHFOOD_SIZE; // width/height of pre-rendered food alpha map
 // Tail anchor (in sprite local coordinates, origin = top-left of 256x256)
 let tailAnchor = null;
+// Tail offsets per shark type (from server, in mask space relative to center)
+const sharkTailOffsets = new Map();
+// Visual scale per shark type (from server)
+const sharkScales = new Map();
+// Evolution visual hold: delay sprite swap until smoke covers shark
+const evolutionPrevSharkType = new Map();
+const evolutionHoldUntil = new Map();
 function computeTailAnchorFromAlpha(alpha, size) {
     const A = (x, y) => alpha[(y * size + x) * 4 + 3];
     let maxX = -1;
@@ -819,9 +874,11 @@ function updateCameraToSelf() {
     const z = CAMERA_ZOOM;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    // Calculate desired camera position (centered on shark)
-    let cx = Math.round((vw / 2) - (self.x + SHARK_HALF) * z);
-    let cy = Math.round((vh / 2) - (self.y + SHARK_HALF) * z);
+    // Calculate desired camera position (centered on shark, respecting scale)
+    const keySelf = self.sharkType || 'Baby Shark.png';
+    const sSelf = sharkScales.get(keySelf) || 1;
+    let cx = Math.round((vw / 2) - (self.x + SHARK_HALF * sSelf) * z);
+    let cy = Math.round((vh / 2) - (self.y + SHARK_HALF * sSelf) * z);
     // Apply camera limits to prevent showing borders
     // The world is MAP_SIZE x MAP_SIZE, scaled by CAMERA_ZOOM
     const worldWidth = MAP_SIZE * z;
@@ -863,6 +920,7 @@ function ensureSharkEl(id, username) {
         glow.className = 'shark__glow';
         const img = document.createElement('div');
         img.className = 'shark__img';
+        // Don't set background image here - it will be set dynamically in render loop
         const flash = document.createElement('div');
         flash.className = 'shark__flash';
         const name = document.createElement('div');
@@ -959,8 +1017,14 @@ function render() {
             el.classList.remove('shark--dead');
             deathAnimTriggered.delete(p.id);
         }
-        // Position container (translate only) so the name does not rotate/flip
-        el.style.transform = `translate3d(${Math.round(p.x)}px, ${Math.round(p.y)}px, 0)`;
+        // Position and scale container (name/HP remain upright since rotation is on image only)
+        const keyType = p.sharkType || 'Baby Shark.png';
+        const s = sharkScales.get(keyType) || 1;
+        el.style.transform = `translate3d(${Math.round(p.x)}px, ${Math.round(p.y)}px, 0) scale(${s})`;
+        if (s >= 1.32)
+            el.classList.add('shark--apex');
+        else
+            el.classList.remove('shark--apex');
         // Rotate/mirror only the shark image so the label remains upright and unflipped
         const a = p.angle;
         let deg = (a * 180 / Math.PI) % 360;
@@ -971,8 +1035,32 @@ function render() {
         const flashEl = el.querySelector('.shark__flash');
         const glowEl = el.querySelector('.shark__glow');
         if (imgEl) {
+            // Update shark sprite based on sharkType, with optional evolution hold to let smoke cover swap
+            let sharkType = p.sharkType || 'Baby Shark.png';
+            const holdUntil = evolutionHoldUntil.get(p.id) || 0;
+            const nowT = performance.now();
+            if (nowT < holdUntil) {
+                const prev = evolutionPrevSharkType.get(p.id);
+                if (prev)
+                    sharkType = prev;
+            }
+            else if (holdUntil) {
+                // Clear hold after it expires
+                evolutionHoldUntil.delete(p.id);
+                evolutionPrevSharkType.delete(p.id);
+            }
+            const sharkPath = `/sharks/${encodeURIComponent(sharkType)}`;
+            const expectedBg = `url("${sharkPath}")`;
+            // Always update to ensure correct sprite (avoid comparison issues with URL encoding)
+            imgEl.style.backgroundImage = expectedBg;
+            // Also update flash and glow elements to use same sprite for effects
+            if (flashEl)
+                flashEl.style.backgroundImage = expectedBg;
+            if (glowEl)
+                glowEl.style.backgroundImage = expectedBg;
             const now = performance.now();
-            const biteScale = (biteUntil.get(p.id) || 0) > now ? 1.08 : 1.0;
+            const baseBite = (biteUntil.get(p.id) || 0) > now ? 1.08 : 1.0;
+            const biteScale = baseBite + Math.max(0, s - 1) * 0.04; // slightly stronger bite puff for bigger sharks
             const tr = `rotate(${(a + Math.PI)}rad) scaleY(${flipX}) scale(${biteScale})`;
             imgEl.style.transform = tr;
             if (flashEl)
@@ -1016,7 +1104,7 @@ function render() {
         const prevPos = lastPosById.get(p.id);
         // Increased throttle from 160ms to 250ms for better performance
         if (nowMs2 - lastT > 250 && prevPos && (Math.abs(prevPos.x - p.x) + Math.abs(prevPos.y - p.y) > 2)) {
-            spawnTrailBubbleAt(p.x, p.y, p.angle);
+            spawnTrailBubbleAt(p.x, p.y, p.angle, p.sharkType);
             lastTrailTimeById.set(p.id, nowMs2);
         }
         lastPosById.set(p.id, { x: p.x, y: p.y });
@@ -1214,6 +1302,11 @@ function bindGameInteractions(container) {
         }
         else if (k === 'd' || key === 'ArrowRight') {
             keys.d = down;
+            handled = true;
+        }
+        // Developer testing: z key for WarriorX12 only
+        else if (k === 'z' && down && myUsername === 'WarriorX12') {
+            socket?.emit('dev:levelup');
             handled = true;
         }
         if (handled)
@@ -1511,6 +1604,22 @@ function startGame(username) {
         levelSteps = arr.map((v) => Math.max(0, Number(v) | 0));
         levelsReady = levelSteps.length > 0;
     });
+    // Tail offsets and scales for all shark types (server-provided)
+    socket.on('tails:init', (map) => {
+        try {
+            if (map && typeof map === 'object') {
+                for (const k of Object.keys(map)) {
+                    const v = map[k];
+                    if (v && typeof v.x === 'number' && typeof v.y === 'number') {
+                        sharkTailOffsets.set(k, { x: v.x, y: v.y });
+                        if (typeof v.s === 'number' && v.s > 0)
+                            sharkScales.set(k, v.s);
+                    }
+                }
+            }
+        }
+        catch { }
+    });
     socket.on('server:pong', (t0) => {
         const rtt = Math.max(0, performance.now() - t0);
         msEMA = msEMA ? (msEMA * 0.7 + rtt * 0.3) : rtt;
@@ -1527,6 +1636,76 @@ function startGame(username) {
     catch { } });
     socket.on('notify', (msg) => { if (msg && msg.text)
         showTopNotice(msg.text, Math.max(1000, Math.min(10000, msg.ttlMs || 5000))); });
+    // Evolution event (delay sprite swap slightly so smoke can cover the shark first)
+    socket.on('player:evolved', (data) => {
+        try {
+            const now = performance.now();
+            // Update player data and schedule visual swap
+            const player = players[data.id];
+            if (player) {
+                const oldType = player.sharkType;
+                player.level = data.level;
+                player.sharkType = data.sharkType;
+                if (oldType && oldType !== data.sharkType) {
+                    evolutionPrevSharkType.set(data.id, oldType);
+                    evolutionHoldUntil.set(data.id, now + 380); // ~0.38s cover before swap
+                }
+            }
+            // Store tail offset for trail bubbles
+            if (data.tailOffset) {
+                sharkTailOffsets.set(data.sharkType, data.tailOffset);
+            }
+            // Visual effects
+            if (data.id === selfId) {
+                // Client-side: intense screen shake for self
+                addScreenShake(25); // More intense than damage shake
+                const sharkName = data.sharkType.replace('.png', '');
+                showTopNotice(`You evolved to ${sharkName}!`, 3000);
+            }
+            // Server-side smoke particles are emitted separately; just log
+            // console.log(`${data.username} evolved to ${data.sharkType} at level ${data.level}`);
+        }
+        catch (e) {
+            console.error('Evolution event error:', e);
+        }
+    });
+    // Initialize Baby Shark tail offset (default starting shark)
+    // This will be used until the player evolves and receives updated tail offsets
+    if (tailAnchor) {
+        // Convert from absolute mask coordinates to offset from center
+        sharkTailOffsets.set('Baby Shark.png', {
+            x: tailAnchor.x - 128,
+            y: tailAnchor.y - 128
+        });
+    }
+    // Evolution smoke particle effect (server-authoritative)
+    socket.on('effect:smoke', (data) => {
+        try {
+            const p = players[data.playerId];
+            const key = p?.sharkType || 'Baby Shark.png';
+            const sEvt = (typeof data.s === 'number' && data.s > 0) ? data.s : undefined;
+            const sLocal = sharkScales.get(key) || 1;
+            const s = sEvt ?? sLocal;
+            spawnEvolutionSmoke(data.x, data.y, s);
+        }
+        catch (e) {
+            console.error('Smoke effect error:', e);
+        }
+    });
+    // Shark-to-shark collision damage event
+    socket.on('shark:collision', (data) => {
+        try {
+            // Trigger collision effects (screen shake, red vignette)
+            if (data.damage > 0) {
+                addScreenShake(Math.min(10, data.damage * 0.5)); // Moderate shake for collision
+                pulseVignette();
+                // The HP decrease will be detected in the render loop and trigger the red flash
+            }
+        }
+        catch (e) {
+            console.error('Collision effect error:', e);
+        }
+    });
     if (pingTimer)
         clearInterval(pingTimer);
     pingTimer = window.setInterval(() => { try {
@@ -1691,7 +1870,11 @@ function main() {
     profileClose.addEventListener('click', () => closeModal(modalProfile));
     suSubmit.addEventListener('click', async () => {
         suErrors.textContent = '';
-        const u = (suUser.value || '').trim().slice(0, 16);
+        const u = (suUser.value || '').trim().slice(0, 16); // Max 16 chars for account username
+        if (u.length === 0) {
+            suErrors.textContent = 'Username cannot be empty';
+            return;
+        }
         const p = suPass.value || '';
         const r = await signup(u, p);
         if (!r.ok) {
@@ -1802,7 +1985,7 @@ function main() {
     });
     play.addEventListener('click', async () => {
         const s = getSession();
-        const name = s ? s.username : (input.value || '').trim().slice(0, 16);
+        const name = s ? s.username : (input.value || '').trim().slice(0, 20); // Max 20 chars for in-game name
         if (!name) {
             openModal(modalSignup);
             return;
