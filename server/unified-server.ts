@@ -1218,6 +1218,58 @@ io.on('connection', (socket) => {
         bubbles[id] = { id, ownerId: socket.id, x: sx, y: sy, vx, vy, expireAt: now + BUBBLE_TTL_MS };
     });
 
+    // Developer testing feature: z key grants +1 level (WarriorX12 only)
+    socket.on('dev:levelup', async () => {
+        const me = gameState.players[socket.id];
+        if (!me || me.dead) return;
+
+        // Restrict to WarriorX12 only
+        if (me.username !== 'WarriorX12') {
+            console.log(`Unauthorized levelup attempt by ${me.username}`);
+            return;
+        }
+
+        const oldLevel = me.level || 1;
+        const newLevel = Math.min(100, oldLevel + 1);
+        me.level = newLevel;
+
+        // Update score to match the new level
+        let totalXP = 0;
+        for (let i = 0; i < newLevel - 1 && i < LEVEL_STEPS.length; i++) {
+            totalXP += LEVEL_STEPS[i];
+        }
+        me.score = totalXP;
+
+        // Check for evolution
+        const newSharkType = getSharkTypeForLevel(newLevel);
+        if (newSharkType !== me.sharkType) {
+            me.sharkType = newSharkType;
+            await loadSharkMask(newSharkType).catch(err => console.error('Failed to load shark mask:', err));
+
+            // Get tail offset for client-side trail bubbles
+            const tailOffset = sharkTailOffsets.get(newSharkType) || { x: -MOUTH_OFFSET_X, y: MOUTH_OFFSET_Y };
+
+            // Emit server-authoritative smoke effect visible to all
+            io.emit('effect:smoke', { x: me.x, y: me.y, playerId: me.id, s: getSharkScaleForType(newSharkType) });
+
+            // Emit evolution event (with tail offset)
+            io.emit('player:evolved', {
+                id: me.id,
+                username: me.username,
+                level: newLevel,
+                sharkType: newSharkType,
+                x: me.x,
+                y: me.y,
+                tailOffset
+            });
+
+            console.log(`[DEV] ${me.username} evolved to ${newSharkType} at level ${newLevel}`);
+        }
+
+        console.log(`[DEV] ${me.username} leveled up to ${newLevel} (score: ${me.score})`);
+        dirty = true;
+    });
+
     // Player respawn request (after death)
     socket.on('player:respawn', () => {
         console.log(`Respawn request from ${socket.id}`);
@@ -1247,6 +1299,8 @@ io.on('connection', (socket) => {
             score: 0,
             hp: 100,
             dead: false,
+            level: 1,
+            sharkType: 'Baby Shark.png',
         } as Player;
         lastUpdate.set(socket.id, Date.now());
         lastPos.set(socket.id, { x: me.x, y: me.y });
