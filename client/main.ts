@@ -1268,7 +1268,8 @@ function step(dt: number) {
   if (socket && selfId && now - throttleAt > 33) {
     throttleAt = now;
     const p = players[selfId];
-    socket.volatile.emit('player:move', { x: p.x, y: p.y, angle: p.angle });
+    // Use reliable emit to avoid drops during burst traffic (e.g., while shooting)
+    socket.emit('player:move', { x: p.x, y: p.y, angle: p.angle });
   }
 }
 

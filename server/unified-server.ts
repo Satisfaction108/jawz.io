@@ -290,6 +290,22 @@ function resampleNearest(src: Uint8Array, srcW: number, srcH: number, dstW: numb
     }
   }
   return dst;
+
+// Preload all shark masks at startup for better performance (parity with game server)
+async function preloadAllSharkMasks(): Promise<void> {
+  if (!SHARK_EVOLUTIONS || SHARK_EVOLUTIONS.length === 0) {
+    console.warn('No shark evolutions loaded, skipping mask preload');
+    return;
+  }
+  console.log('Preloading all shark masks...');
+  for (const sharkType of SHARK_EVOLUTIONS) {
+    try {
+      await loadSharkMask(sharkType);
+    } catch (e) {
+      console.error(`Failed to preload mask for ${sharkType}:`, e);
+    }
+  }
+  console.log('All shark masks preloaded');
 }
 
 async function loadLevelProgression(): Promise<void> {
@@ -550,8 +566,8 @@ httpServer.on('request', async (req: IncomingMessage, res: ServerResponse) => {
   const url = req.url || '/';
   const method = (req.method || 'GET').toUpperCase();
 
-  // Skip Socket.IO routes - Socket.IO already handles them
-  if (url.startsWith('/socket.io/')) {
+  // Skip Socket.IO routes - Socket.IO already handles them (match both with and without trailing slash)
+  if (url.startsWith('/socket.io')) {
     return; // Already handled by Socket.IO
   }
 
@@ -1005,7 +1021,8 @@ function updateFoods(dt: number): Array<{ id: number; x: number; y: number }> {
 io.on('connection', (socket) => {
     const clientIp = socket.handshake.address;
     const transport = socket.conn.transport.name;
-    console.log(`Player connected: ${socket.id} from ${clientIp} via ${transport}`);
+    const alloc = process.env.FLY_ALLOC_ID || 'local';
+    console.log(`Player connected: ${socket.id} from ${clientIp} via ${transport} (alloc=${alloc}, pid=${process.pid})`);
     console.log(`Total players online: ${Object.keys(gameState.players).length + 1}`);
 
     // Initialize new player
@@ -1062,6 +1079,17 @@ io.on('connection', (socket) => {
         socket.broadcast.emit('player:new', gameState.players[socket.id]);
         // Send level steps to the new player (client computes progress locally)
         if (LEVEL_STEPS.length > 0) socket.emit('levels:init', LEVEL_STEPS);
+
+        // Send precomputed tail offsets and visual scales for all sharks
+        try {
+          const tails: Record<string, { x: number; y: number; s: number }> = {};
+          for (const [type, off] of sharkTailOffsets.entries()) {
+            tails[type] = { x: off.x, y: off.y, s: getSharkScaleForType(type) };
+          }
+          socket.emit('tails:init', tails);
+        } catch (e) {
+          console.warn('Failed to emit tails:init', e);
+        }
     });
 
     // Update player position and rotation
@@ -1551,7 +1579,9 @@ setInterval(() => {
 // Kick off server-side mask loading and continuous collision checks
 loadServerMasks().catch(() => {});
 loadLevelProgression().catch(() => {});
-loadSharkEvolutions().catch(() => {});
+loadSharkEvolutions()
+  .then(() => preloadAllSharkMasks())
+  .catch(() => {});
 
 setInterval(() => {
   if (!sharkMask || !foodMask) return;
@@ -1578,9 +1608,11 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 
 httpServer.listen(PORT, HOST, () => {
+    const alloc = process.env.FLY_ALLOC_ID || 'local';
     console.log('='.repeat(60));
     console.log(`🚀 Unified server (Static + Game) running on ${HOST}:${PORT}`);
     console.log(`📦 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🆔 Fly alloc: ${alloc} • PID: ${process.pid}`);
     console.log(`🎮 Map size: ${MAP_SIZE}x${MAP_SIZE} pixels`);
     console.log(`🦈 Shark evolutions: ${SHARK_EVOLUTIONS.length} types loaded`);
     console.log(`📊 Level steps: ${LEVEL_STEPS.length} levels configured`);
