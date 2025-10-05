@@ -976,6 +976,9 @@ ensureFoodPopulation();
 let dirty = false;
 
 let foodsEmitAccum = 0;
+let playersEmitAccum = 0;
+const PLAYERS_EMIT_MS = 50; // reliable ~20 Hz players updates
+
 const FOODS_EMIT_MS = 100; // emit foods at ~10 Hz to reduce bandwidth
 
 // Gentle wandering movement for fish food (server-authoritative)
@@ -987,6 +990,7 @@ function updateFoods(dt: number): Array<{ id: number; x: number; y: number }> {
       const sp = rand(8, 18);
       f.vx = Math.cos(ang) * sp;
       f.vy = Math.sin(ang) * sp;
+
     } else {
       const steer = 4; // px/s^2 random steering
       f.vx += (Math.random() - 0.5) * steer * dt;
@@ -1013,6 +1017,10 @@ io.on('connection', (socket) => {
     const alloc = process.env.FLY_ALLOC_ID || 'local';
     console.log(`Player connected: ${socket.id} from ${clientIp} via ${transport} (alloc=${alloc}, pid=${process.pid})`);
     console.log(`Total players online: ${Object.keys(gameState.players).length + 1}`);
+
+
+    // One-time latency probe handler
+    socket.on('client:ping', (t0: number) => { socket.emit('server:pong', t0); });
 
     // Initialize new player
     socket.on('player:join', (username: string) => {
@@ -1232,9 +1240,6 @@ io.on('connection', (socket) => {
 
             // Movement update complete; mark dirty for broadcast
             dirty = true;
-
-        // Latency probe
-        socket.on('client:ping', (t0: number) => { socket.emit('server:pong', t0); });
 
         }
     });
@@ -1538,16 +1543,20 @@ setInterval(() => {
       foodsEmitAccum = 0;
     }
 
-    // Players broadcast if state changed
+    // Players broadcast if state changed (reliable at ~20 Hz)
     if (dirty) {
-        dirty = false;
-        io.volatile.compress(false).emit('players:update', { ts: Date.now(), players: gameState.players });
-        // Server-side leaderboard (top 10 by score) — reliable emit (non-volatile)
-        const lb = Object.values(gameState.players)
-          .sort((a,b) => b.score - a.score)
-          .slice(0, 10)
-          .map(p => ({ id: p.id, username: p.username, score: p.score }));
-        io.compress(false).emit('leaderboard:update', lb);
+        playersEmitAccum += TICK_MS;
+        if (playersEmitAccum >= PLAYERS_EMIT_MS) {
+          dirty = false;
+          playersEmitAccum = 0;
+          io.compress(false).emit('players:update', { ts: Date.now(), players: gameState.players });
+          // Server-side leaderboard (top 10 by score) — reliable emit (non-volatile)
+          const lb = Object.values(gameState.players)
+            .sort((a,b) => b.score - a.score)
+            .slice(0, 10)
+            .map(p => ({ id: p.id, username: p.username, score: p.score }));
+          io.compress(false).emit('leaderboard:update', lb);
+        }
     }
 
 }, TICK_MS);
