@@ -17,7 +17,7 @@ COPY . .
 # Build the client TypeScript
 RUN npm run build
 
-# Expose the port (Fly.io will set PORT env var)
+# Expose the port (platform sets PORT env var)
 EXPOSE 3000
 
 # Start the unified server

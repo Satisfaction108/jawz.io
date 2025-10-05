@@ -3,7 +3,7 @@ import { extname, join, normalize } from 'path';
 import { createReadStream, existsSync, statSync } from 'fs';
 import { promises as fsp } from 'fs';
 
-// Use environment PORT for production (Render.com), fallback to 3000 for local dev
+// Use environment PORT for production, fallback to 3000 for local dev
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 

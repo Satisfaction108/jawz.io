@@ -454,11 +454,7 @@ const httpServer = createServer();
 
 // Dynamic CORS configuration for development and production
 const allowedOrigins = process.env.NODE_ENV === 'production'
-    ? [
-        process.env.FRONTEND_URL || 'https://jawz.onrender.com',
-        'https://jawz.onrender.com',
-        'https://jawz-io.onrender.com'
-      ]
+    ? (process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : [])
     : [
         "http://localhost:3000",
         "http://localhost:3001",
@@ -1421,7 +1417,7 @@ setInterval(() => {
 }, TICK_MS);
 
 
-// Use environment PORT for production (Render.com), fallback to 3002 for local dev
+// Use environment PORT for production, fallback to 3002 for local dev
 const envPort = process.env.PORT;
 const PORT = envPort ? parseInt(envPort as string, 10) : 3002;
 const HOST = process.env.HOST || '0.0.0.0';

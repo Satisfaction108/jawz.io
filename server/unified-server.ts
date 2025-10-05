@@ -633,12 +633,7 @@ httpServer.on('request', async (req: IncomingMessage, res: ServerResponse) => {
 
 // Dynamic CORS configuration for development and production
 const allowedOrigins = process.env.NODE_ENV === 'production'
-    ? [
-        process.env.FRONTEND_URL || 'https://jawz-io.fly.dev',
-        'https://jawz-io.fly.dev',
-        'https://jawz.onrender.com',
-        'https://jawz-io.onrender.com'
-      ]
+    ? (process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : [])
     : [
         "http://localhost:3000",
         "http://localhost:3001",
@@ -1601,16 +1596,14 @@ setInterval(() => {
 }, TICK_MS);
 
 
-// Use environment PORT for production (Fly.io/Render.com), fallback to 3000 for local dev
+// Use environment PORT for production, fallback to 3000 for local dev
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const HOST = process.env.HOST || '0.0.0.0';
 
 httpServer.listen(PORT, HOST, () => {
-    const alloc = process.env.FLY_ALLOC_ID || 'local';
     console.log('='.repeat(60));
     console.log(`🚀 Unified server (Static + Game) running on ${HOST}:${PORT}`);
     console.log(`📦 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🆔 Fly alloc: ${alloc} • PID: ${process.pid}`);
     console.log(`🎮 Map size: ${MAP_SIZE}x${MAP_SIZE} pixels`);
     console.log(`🦈 Shark evolutions: ${SHARK_EVOLUTIONS.length} types loaded`);
     console.log(`📊 Level steps: ${LEVEL_STEPS.length} levels configured`);
