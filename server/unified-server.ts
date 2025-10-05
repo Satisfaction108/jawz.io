@@ -280,17 +280,6 @@ function getPlayerMask(player: Player): Uint8Array | null {
   return sharkMasks.get(player.sharkType) || sharkMask;
 }
 
-function resampleNearest(src: Uint8Array, srcW: number, srcH: number, dstW: number, dstH: number): Uint8Array {
-  const dst = new Uint8Array(dstW * dstH);
-  for (let y = 0; y < dstH; y++) {
-    const sy = Math.floor((y + 0.5) * srcH / dstH);
-    for (let x = 0; x < dstW; x++) {
-      const sx = Math.floor((x + 0.5) * srcW / dstW);
-      dst[y * dstW + x] = src[sy * srcW + sx];
-    }
-  }
-  return dst;
-
 // Preload all shark masks at startup for better performance (parity with game server)
 async function preloadAllSharkMasks(): Promise<void> {
   if (!SHARK_EVOLUTIONS || SHARK_EVOLUTIONS.length === 0) {
@@ -1604,7 +1593,7 @@ setInterval(() => {
 
 
 // Use environment PORT for production (Fly.io/Render.com), fallback to 3000 for local dev
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const PORT = parseInt(process.env.PORT || '3000', 10);
 const HOST = process.env.HOST || '0.0.0.0';
 
 httpServer.listen(PORT, HOST, () => {
