@@ -369,9 +369,9 @@ function pixelPerfectOverlap(me: Player, food: Food): boolean {
     for (let fx = 0; fx < FOOD_SIZE; fx++) {
       if (foodMask[fy * FOOD_SIZE + fx] === 0) continue;
 
-      // Food pixel world position (center of pixel)
-      const wx = food.x + fx + 0.5;
-      const wy = food.y + fy + 0.5;
+      // Food pixel world position (center of pixel) — food.x/y are CENTER on client
+      const wx = food.x - FOOD_HALF + fx + 0.5;
+      const wy = food.y - FOOD_HALF + fy + 0.5;
 
       // Translate to shark-local space
       const vx = wx - cx;
@@ -765,7 +765,7 @@ function bubbleHitsShark(p: Player, bx: number, by: number): boolean {
   return false;
 }
 
-// Pixel-perfect shark-to-shark collision detection (scaled)
+// Pixel-perfect shark-to-shark collision detection (scaled, robust for large sharks)
 function sharkCollidesWithShark(shark1: Player, shark2: Player): boolean {
   const mask1 = getPlayerMask(shark1);
   const mask2 = getPlayerMask(shark2);
@@ -773,81 +773,105 @@ function sharkCollidesWithShark(shark1: Player, shark2: Player): boolean {
 
   const sf1 = getSharkScaleForType(shark1.sharkType);
   const sf2 = getSharkScaleForType(shark2.sharkType);
-  // Coarse prune: sum of radii at current scale
-  const cx1 = shark1.x + PLAYER_RADIUS * sf1, cy1 = shark1.y + PLAYER_RADIUS * sf1;
-  const cx2 = shark2.x + PLAYER_RADIUS * sf2, cy2 = shark2.y + PLAYER_RADIUS * sf2;
+
+  // Coarse prune: sum of radii at current scale with a small safety pad (helps big sharks)
+  const r1 = PLAYER_RADIUS * sf1;
+  const r2 = PLAYER_RADIUS * sf2;
+  const cx1 = shark1.x + r1, cy1 = shark1.y + r1;
+  const cx2 = shark2.x + r2, cy2 = shark2.y + r2;
   const dx = cx2 - cx1, dy = cy2 - cy1;
-  const maxR = PLAYER_RADIUS * (sf1 + sf2);
+  const pad = Math.max(2, Math.round(2 * Math.max(sf1, sf2))); // a few px to absorb rounding at high scales
+  const maxR = r1 + r2 + pad;
   if ((dx * dx + dy * dy) > (maxR * maxR)) return false;
 
-  // Setup transforms for both sharks
+  // Setup transforms matching client: world = center + rotate(angle+PI) * (flipY * local)
   const a1 = shark1.angle;
   let deg1 = (a1 * 180 / Math.PI) % 360; if (deg1 < 0) deg1 += 360;
   const flipY1 = (deg1 > 270 || deg1 < 90) ? -1 : 1;
   const rot1 = a1 + Math.PI;
-  const cos1Inv = Math.cos(-rot1), sin1Inv = Math.sin(-rot1);
+  const cos1Inv = Math.cos(-rot1), sin1Inv = Math.sin(-rot1); // inverse for mapping world->mask1
   const scale1 = SHARK_SCALE * sf1;
 
   const a2 = shark2.angle;
   let deg2 = (a2 * 180 / Math.PI) % 360; if (deg2 < 0) deg2 += 360;
   const flipY2 = (deg2 > 270 || deg2 < 90) ? -1 : 1;
   const rot2 = a2 + Math.PI;
-  const cos2 = Math.cos(rot2), sin2 = Math.sin(rot2);
+  const cos2 = Math.cos(rot2), sin2 = Math.sin(rot2); // forward for mask2->world
   const scale2 = SHARK_SCALE * sf2;
 
-  // Adaptive sampling: denser for larger sharks
-  const maxScale = Math.max(sf1, sf2);
-  const step = maxScale > 1.3 ? 1 : (maxScale > 1.2 ? 2 : (maxScale > 1.1 ? 3 : 4));
+  // Choose sampling step so the step in world space ~1px (denser for reliable baby + large sharks)
+  const stepFor = (sf: number) => Math.max(1, Math.floor(1 / (SHARK_SCALE * sf)));
+  const step1 = stepFor(sf1);
+  const step2 = stepFor(sf2);
 
-  // Sample shark2's mask pixels and check against shark1
-  for (let my = 0; my < SHARK_MASK_SIZE; my += step) {
-    for (let mx = 0; mx < SHARK_MASK_SIZE; mx += step) {
-      if (mask2[my * SHARK_MASK_SIZE + mx] === 0) continue;
+  // Neighborhood kernel increases for very large sharks to reduce misses on thin parts
+  const kernelFor = (sf: number) => (sf >= 1.3 ? 2 : 1); // 3x3 or 5x5
+  const k1 = kernelFor(sf1);
+  const k2 = kernelFor(sf2);
 
-      // Convert shark2 mask coords to local coords
-      const lx2 = (mx - SHARK_MASK_SIZE / 2) * scale2;
-      const ly2 = (my - SHARK_MASK_SIZE / 2) * scale2;
+  // Helper: sample src mask, project to dst mask, return true on first colored-over-colored hit
+  const samplesHit = (
+    srcMask: Uint8Array,
+    srcCenterX: number, srcCenterY: number,
+    srcCos: number, srcSin: number, srcFlipY: number, srcScale: number,
+    dstMask: Uint8Array,
+    dstCenterX: number, dstCenterY: number,
+    dstCosInv: number, dstSinInv: number, dstFlipY: number, dstScale: number,
+    step: number, kernel: number
+  ): boolean => {
+    for (let my = 0; my < SHARK_MASK_SIZE; my += step) {
+      for (let mx = 0; mx < SHARK_MASK_SIZE; mx += step) {
+        if (srcMask[my * SHARK_MASK_SIZE + mx] === 0) continue; // only colored pixels
 
-      // Apply shark2's flip and rotation to get world position
-      const ly2_flipped = ly2 * flipY2;
-      const wx = cx2 + (lx2 * cos2 - ly2_flipped * sin2);
-      const wy = cy2 + (lx2 * sin2 + ly2_flipped * cos2);
+        // Local (mask) -> local (world) in px
+        const lx = (mx - SHARK_MASK_SIZE / 2) * srcScale;
+        const ly = (my - SHARK_MASK_SIZE / 2) * srcScale;
 
-      // Transform world point to shark1's local space
-      const vx = wx - cx1;
-      const vy = wy - cy1;
+        // Apply flip in local space, then rotation to world
+        const lyF = ly * srcFlipY;
+        const wx = srcCenterX + (lx * srcCos - lyF * srcSin);
+        const wy = srcCenterY + (lx * srcSin + lyF * srcCos);
 
-      // Apply inverse rotation for shark1
-      const rx1 = cos1Inv * vx - sin1Inv * vy;
-      const ry1 = sin1Inv * vx + cos1Inv * vy;
+        // World -> dst local (inverse rotation then inverse flip)
+        const vx = wx - dstCenterX;
+        const vy = wy - dstCenterY;
+        const rx = dstCosInv * vx - dstSinInv * vy;
+        const ry = dstSinInv * vx + dstCosInv * vy;
+        const lxD = rx;
+        const lyD = ry * dstFlipY;
 
-      // Apply inverse flip for shark1
-      const lx1 = rx1;
-      const ly1 = ry1 * flipY1;
-
-      // Convert to shark1's mask coordinates
-      const mx1 = (lx1 / scale1) + (SHARK_MASK_SIZE / 2);
-      const my1 = (ly1 / scale1) + (SHARK_MASK_SIZE / 2);
-
-      // Check center pixel
-      const mx1i = Math.round(mx1);
-      const my1i = Math.round(my1);
-      if (mx1i >= 0 && my1i >= 0 && mx1i < SHARK_MASK_SIZE && my1i < SHARK_MASK_SIZE) {
-        if (mask1[my1i * SHARK_MASK_SIZE + mx1i] !== 0) return true;
-      }
-
-      // Check 3x3 neighborhood for sub-pixel accuracy
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const tx = mx1i + dx;
-          const ty = my1i + dy;
-          if (tx >= 0 && ty >= 0 && tx < SHARK_MASK_SIZE && ty < SHARK_MASK_SIZE) {
-            if (mask1[ty * SHARK_MASK_SIZE + tx] !== 0) return true;
+        // dst mask coordinates
+        const mxD = (lxD / dstScale) + (SHARK_MASK_SIZE / 2);
+        const myD = (lyD / dstScale) + (SHARK_MASK_SIZE / 2);
+        const xi = Math.round(mxD);
+        const yi = Math.round(myD);
+        if (xi >= 0 && yi >= 0 && xi < SHARK_MASK_SIZE && yi < SHARK_MASK_SIZE) {
+          if (dstMask[yi * SHARK_MASK_SIZE + xi] !== 0) return true;
+          // Check neighborhood
+          for (let oy = -kernel; oy <= kernel; oy++) {
+            for (let ox = -kernel; ox <= kernel; ox++) {
+              const tx = xi + ox, ty = yi + oy;
+              if (tx < 0 || ty < 0 || tx >= SHARK_MASK_SIZE || ty >= SHARK_MASK_SIZE) continue;
+              if (dstMask[ty * SHARK_MASK_SIZE + tx] !== 0) return true;
+            }
           }
         }
       }
     }
-  }
+    return false;
+  };
+
+  // Check both directions to avoid misses on thin geometry
+  if (samplesHit(mask2, cx2, cy2, cos2, sin2, flipY2, scale2,
+                 mask1, cx1, cy1, cos1Inv, sin1Inv, flipY1, scale1,
+                 step2, k1)) return true;
+
+  // Also sample mask1 against mask2 (swap roles)
+  const cos1 = Math.cos(rot1), sin1 = Math.sin(rot1);
+  const cos2Inv = Math.cos(-rot2), sin2Inv = Math.sin(-rot2);
+  if (samplesHit(mask1, cx1, cy1, cos1, sin1, flipY1, scale1,
+                 mask2, cx2, cy2, cos2Inv, sin2Inv, flipY2, scale2,
+                 step1, k2)) return true;
 
   return false;
 }
@@ -1075,7 +1099,9 @@ io.on('connection', (socket) => {
         // Send precomputed tail offsets and visual scales for all sharks
         try {
           const tails: Record<string, { x: number; y: number; s: number }> = {};
-          for (const [type, off] of sharkTailOffsets.entries()) {
+          const types = (SHARK_EVOLUTIONS && SHARK_EVOLUTIONS.length) ? SHARK_EVOLUTIONS : ['Baby Shark.png'];
+          for (const type of types) {
+            const off = sharkTailOffsets.get(type) || { x: -MOUTH_OFFSET_X, y: MOUTH_OFFSET_Y };
             tails[type] = { x: off.x, y: off.y, s: getSharkScaleForType(type) };
           }
           socket.emit('tails:init', tails);
@@ -1239,18 +1265,22 @@ io.on('connection', (socket) => {
         }
     });
 
-        // Client-reported eat request after client-side pixel-perfect collision check
+        // Client-reported eat request — server verifies with pixel-perfect mask overlap
         socket.on('player:eat', (foodId: number) => {
             const me = gameState.players[socket.id];
             const food = gameState.foods[Number(foodId)];
             if (!me || !food) return;
 
+            // Coarse range check first (scaled radius) to avoid heavy math when far
+            const sf = getSharkScaleForType(me.sharkType);
+            const cx = me.x + PLAYER_RADIUS * sf, cy = me.y + PLAYER_RADIUS * sf;
+            const dx = cx - food.x;
+            const dy = cy - food.y;
+            const maxR = PLAYER_RADIUS * sf + FOOD_HALF + 18; // small slack
+            if ((dx*dx + dy*dy) > (maxR*maxR)) return;
 
-            // Coarse validation (distance) to prevent out-of-range requests
-            const dx = (me.x + PLAYER_RADIUS) - food.x;
-            const dy = (me.y + PLAYER_RADIUS) - food.y;
-            const dist = Math.hypot(dx, dy);
-            if (dist <= PLAYER_RADIUS + FOOD_RADIUS + 22 /* tolerance: increased to reduce false negatives */) {
+            // Server-authoritative pixel-perfect verification using binary masks
+            if (pixelPerfectOverlap(me, food)) {
                 if (gameState.foods[food.id]) handleConsume(me, food);
             }
         });

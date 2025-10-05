@@ -327,10 +327,10 @@ function pixelPerfectOverlap(me: Player, food: Food): boolean {
 
   // Coarse prune with per-shark scale
   const sf = getSharkScaleForType(me.sharkType);
-  const effR = PLAYER_RADIUS * sf;
+  const effR = SHARK_HALF * sf;
   const cx = me.x + effR, cy = me.y + effR;
   const dx = cx - food.x, dy = cy - food.y;
-  const maxR = effR + FOOD_HALF + 20;
+  const maxR = effR + FOOD_RADIUS + 40;
   if ((dx*dx + dy*dy) > (maxR*maxR)) return false;
 
   // Match client rendering: rotate(angle + PI) then scaleY(flipY)
@@ -348,9 +348,9 @@ function pixelPerfectOverlap(me: Player, food: Food): boolean {
     for (let fx = 0; fx < FOOD_SIZE; fx++) {
       if (foodMask[fy * FOOD_SIZE + fx] === 0) continue;
 
-      // Food pixel world position (center of pixel)
-      const wx = food.x + fx + 0.5;
-      const wy = food.y + fy + 0.5;
+      // Food pixel world position (center of pixel); food.x/y are CENTER coordinates
+      const wx = (food.x - FOOD_HALF) + fx + 0.5;
+      const wy = (food.y - FOOD_HALF) + fy + 0.5;
 
       // Translate to shark-local space
       const vx = wx - cx;
@@ -375,9 +375,9 @@ function pixelPerfectOverlap(me: Player, food: Food): boolean {
         if (playerMask[myi * SHARK_MASK_SIZE + mxi] !== 0) return true;
       }
 
-      // Check 3x3 neighborhood for sub-pixel accuracy
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
+      // Check 5x5 neighborhood for sub-pixel accuracy (increased for larger sharks)
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
           const tx = mxi + dx;
           const ty = myi + dy;
           if (tx >= 0 && ty >= 0 && tx < SHARK_MASK_SIZE && ty < SHARK_MASK_SIZE) {
@@ -519,7 +519,7 @@ function bubbleHitsShark(p: Player, bx: number, by: number): boolean {
   const sf = getSharkScaleForType(p.sharkType);
   const cx = p.x + PLAYER_RADIUS * sf, cy = p.y + PLAYER_RADIUS * sf;
   const dx = bx - cx, dy = by - cy;
-  const maxR = PLAYER_RADIUS * sf + 8; // increased slack for better edge detection
+  const maxR = PLAYER_RADIUS * sf + 12; // increased slack for better edge detection
   if ((dx * dx + dy * dy) > (maxR * maxR)) return false;
 
   // Inverse of the visual transform applied on client: rotate(a+PI) then flipY based on quadrant
@@ -535,34 +535,22 @@ function bubbleHitsShark(p: Player, bx: number, by: number): boolean {
   const ly = ry * flipY;
   // Map to mask pixel coordinates (scale to mask space with visual scale s)
   const scale = SHARK_SCALE * sf;
-  const ux = Math.round((lx / scale) + (SHARK_MASK_SIZE / 2));
-  const uy = Math.round((ly / scale) + (SHARK_MASK_SIZE / 2));
-  if (ux < 0 || uy < 0 || ux >= SHARK_MASK_SIZE || uy >= SHARK_MASK_SIZE) return false;
-  const idx = uy * SHARK_MASK_SIZE + ux;
-  if (playerMask[idx] !== 0) return true;
-
-  // Enhanced 7x7 kernel for better collision detection with scaled sprites and moving bullets
+  
+  // Check a 5x5 grid of sample points around the bullet position for better accuracy
   // This ensures we catch bullets that hit any colored pixel of the shark
-  for (let oy = -3; oy <= 3; oy++) {
-    for (let ox = -3; ox <= 3; ox++) {
-      const x = ux + ox, y = uy + oy;
-      if (x < 0 || y < 0 || x >= SHARK_MASK_SIZE || y >= SHARK_MASK_SIZE) continue;
-      if (playerMask[y * SHARK_MASK_SIZE + x] !== 0) return true;
+  const sampleRadius = 2.5; // pixels in world space
+  for (let sy = -2; sy <= 2; sy++) {
+    for (let sx = -2; sx <= 2; sx++) {
+      const sampleX = lx + (sx * sampleRadius);
+      const sampleY = ly + (sy * sampleRadius);
+      
+      const ux = Math.round((sampleX / scale) + (SHARK_MASK_SIZE / 2));
+      const uy = Math.round((sampleY / scale) + (SHARK_MASK_SIZE / 2));
+      
+      if (ux >= 0 && uy >= 0 && ux < SHARK_MASK_SIZE && uy < SHARK_MASK_SIZE) {
+        if (playerMask[uy * SHARK_MASK_SIZE + ux] !== 0) return true;
+      }
     }
-  }
-
-  // Additional sub-pixel sampling for fast-moving bullets
-  // Sample 4 points around the bullet center for better accuracy
-  const offsets = [
-    { dx: -1, dy: -1 }, { dx: 1, dy: -1 },
-    { dx: -1, dy: 1 }, { dx: 1, dy: 1 }
-  ];
-
-  for (const offset of offsets) {
-    const sx = ux + offset.dx;
-    const sy = uy + offset.dy;
-    if (sx < 0 || sy < 0 || sx >= SHARK_MASK_SIZE || sy >= SHARK_MASK_SIZE) continue;
-    if (playerMask[sy * SHARK_MASK_SIZE + sx] !== 0) return true;
   }
 
   return false;
@@ -577,10 +565,10 @@ function sharkCollidesWithShark(shark1: Player, shark2: Player): boolean {
   // Coarse prune: check if bounding circles overlap (respect per-shark scale)
   const sf1 = getSharkScaleForType(shark1.sharkType);
   const sf2 = getSharkScaleForType(shark2.sharkType);
-  const cx1 = shark1.x + PLAYER_RADIUS * sf1, cy1 = shark1.y + PLAYER_RADIUS * sf1;
-  const cx2 = shark2.x + PLAYER_RADIUS * sf2, cy2 = shark2.y + PLAYER_RADIUS * sf2;
+  const cx1 = shark1.x + SHARK_HALF * sf1, cy1 = shark1.y + SHARK_HALF * sf1;
+  const cx2 = shark2.x + SHARK_HALF * sf2, cy2 = shark2.y + SHARK_HALF * sf2;
   const dx = cx2 - cx1, dy = cy2 - cy1;
-  const maxR = PLAYER_RADIUS * (sf1 + sf2);
+  const maxR = SHARK_HALF * (sf1 + sf2) + 20;
   if ((dx * dx + dy * dy) > (maxR * maxR)) return false;
 
   // Setup transforms for both sharks
@@ -598,61 +586,70 @@ function sharkCollidesWithShark(shark1: Player, shark2: Player): boolean {
   const cos2 = Math.cos(rot2), sin2 = Math.sin(rot2);
   const scale2 = SHARK_SCALE * sf2;
 
-  // Adaptive sampling: denser for larger sharks
-  const maxScale = Math.max(sf1, sf2);
-  const step = maxScale > 1.3 ? 1 : (maxScale > 1.2 ? 2 : (maxScale > 1.1 ? 3 : 4));
+  // Choose step in mask pixels so that sampling spacing in WORLD space is <= 1px
+  const step2 = Math.max(1, Math.floor(1 / Math.max(0.0001, scale2)));
+  const step1 = Math.max(1, Math.floor(1 / Math.max(0.0001, scale1)));
 
-  // Sample shark2's mask pixels and check against shark1
-  for (let my = 0; my < SHARK_MASK_SIZE; my += step) {
-    for (let mx = 0; mx < SHARK_MASK_SIZE; mx += step) {
-      if (mask2[my * SHARK_MASK_SIZE + mx] === 0) continue;
-
-      // Convert shark2 mask coords to local coords
-      const lx2 = (mx - SHARK_MASK_SIZE / 2) * scale2;
-      const ly2 = (my - SHARK_MASK_SIZE / 2) * scale2;
-
-      // Apply shark2's flip and rotation to get world position
-      const ly2_flipped = ly2 * flipY2;
-      const wx = cx2 + (lx2 * cos2 - ly2_flipped * sin2);
-      const wy = cy2 + (lx2 * sin2 + ly2_flipped * cos2);
-
-      // Transform world point to shark1's local space
-      const vx = wx - cx1;
-      const vy = wy - cy1;
-
-      // Apply inverse rotation for shark1
-      const rx1 = cos1Inv * vx - sin1Inv * vy;
-      const ry1 = sin1Inv * vx + cos1Inv * vy;
-
-      // Apply inverse flip for shark1
-      const lx1 = rx1;
-      const ly1 = ry1 * flipY1;
-
-      // Convert to shark1's mask coordinates
-      const mx1 = (lx1 / scale1) + (SHARK_MASK_SIZE / 2);
-      const my1 = (ly1 / scale1) + (SHARK_MASK_SIZE / 2);
-
-      // Check center pixel
-      const mx1i = Math.round(mx1);
-      const my1i = Math.round(my1);
-      if (mx1i >= 0 && my1i >= 0 && mx1i < SHARK_MASK_SIZE && my1i < SHARK_MASK_SIZE) {
-        if (mask1[my1i * SHARK_MASK_SIZE + mx1i] !== 0) return true;
-      }
-
-      // Check 3x3 neighborhood for sub-pixel accuracy
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const tx = mx1i + dx;
-          const ty = my1i + dy;
-          if (tx >= 0 && ty >= 0 && tx < SHARK_MASK_SIZE && ty < SHARK_MASK_SIZE) {
-            if (mask1[ty * SHARK_MASK_SIZE + tx] !== 0) return true;
+  // Helper: test mask A (world from shark2) against B (mask of shark1)
+  const testAIntoB = (
+    useStep: number,
+    sampleMask: Uint8Array,
+    sScale: number,
+    sFlipY: number,
+    sCos: number,
+    sSin: number,
+    sCx: number,
+    sCy: number,
+    dCosInv: number,
+    dSinInv: number,
+    dScale: number,
+    dFlipY: number,
+    dCx: number,
+    dCy: number,
+    dstMask: Uint8Array
+  ): boolean => {
+    for (let my = 0; my < SHARK_MASK_SIZE; my += useStep) {
+      for (let mx = 0; mx < SHARK_MASK_SIZE; mx += useStep) {
+        if (sampleMask[my * SHARK_MASK_SIZE + mx] === 0) continue;
+        const lx = (mx - SHARK_MASK_SIZE / 2) * sScale;
+        const ly = (my - SHARK_MASK_SIZE / 2) * sScale * sFlipY;
+        // World position comes from SOURCE shark (sCx/sCy)
+        const wx = sCx + (lx * sCos - ly * sSin);
+        const wy = sCy + (lx * sSin + ly * sCos);
+        // Transform to DEST shark local space (subtract dest center)
+        const vx = wx - dCx;
+        const vy = wy - dCy;
+        const rx = dCosInv * vx - dSinInv * vy;
+        const ry = dSinInv * vx + dCosInv * vy;
+        // Apply dest flip
+        const lx1 = rx;
+        const ly1 = ry * dFlipY;
+        const mx1 = Math.round((lx1 / dScale) + (SHARK_MASK_SIZE / 2));
+        const my1 = Math.round((ly1 / dScale) + (SHARK_MASK_SIZE / 2));
+        if (mx1 >= 0 && my1 >= 0 && mx1 < SHARK_MASK_SIZE && my1 < SHARK_MASK_SIZE) {
+          if (dstMask[my1 * SHARK_MASK_SIZE + mx1] !== 0) return true;
+          // 5x5 neighborhood
+          for (let oy = -2; oy <= 2; oy++) {
+            for (let ox = -2; ox <= 2; ox++) {
+              const tx = mx1 + ox, ty = my1 + oy;
+              if (tx >= 0 && ty >= 0 && tx < SHARK_MASK_SIZE && ty < SHARK_MASK_SIZE) {
+                if (dstMask[ty * SHARK_MASK_SIZE + tx] !== 0) return true;
+              }
+            }
           }
         }
       }
     }
-  }
+    return false;
+  };
 
-  return false;
+  // Pass 1: sample shark2 into shark1
+  if (testAIntoB(step2, mask2, scale2, flipY2, cos2, sin2, cx2, cy2, cos1Inv, sin1Inv, scale1, flipY1, cx1, cy1, mask1)) return true;
+  // Pass 2: sample shark1 into shark2 (symmetric), swap roles
+  const cos1 = Math.cos(rot1), sin1 = Math.sin(rot1);
+  const cos2Inv = Math.cos(-rot2), sin2Inv = Math.sin(-rot2);
+  const result = testAIntoB(step1, mask1, scale1, flipY1, cos1, sin1, cx1, cy1, cos2Inv, sin2Inv, scale2, flipY2, cx2, cy2, mask2);
+  return result;
 }
 
 // --- Damage tracking and kill/assist awarding ---
@@ -944,7 +941,7 @@ io.on('connection', (socket) => {
                     const len = Math.hypot(dxk, dyk) || 1;
                     dxk /= len; dyk /= len;
                     const sAvg = (sfMe + sfOt) / 2;
-                    const KB = Math.round(70 * sAvg); // reduced knockback
+                    const KB = Math.round(100 * sAvg); // increased knockback
 
                     // Initial symmetric push
                     let nx0 = Math.max(0, Math.min(MAP_SIZE - effSizeMe, me.x + dxk * KB));
@@ -957,9 +954,9 @@ io.on('connection', (socket) => {
                     let ocx = ox0 + PLAYER_RADIUS * sfOt, ocy = oy0 + PLAYER_RADIUS * sfOt;
                     let sdx = ncx - ocx, sdy = ncy - ocy;
                     let dist = Math.hypot(sdx, sdy) || 1;
-                    const target = PLAYER_RADIUS * sfMe + PLAYER_RADIUS * sfOt + 1; // +1px margin
+                    const target = PLAYER_RADIUS * sfMe + PLAYER_RADIUS * sfOt + 10; // increased margin
                     if (dist < target) {
-                        const need = (target - dist) / 2;
+                        const need = (target - dist) / 2 + 5; // extra padding
                         sdx /= dist; sdy /= dist;
                         nx0 = Math.max(0, Math.min(MAP_SIZE - effSizeMe, nx0 + sdx * need));
                         ny0 = Math.max(0, Math.min(MAP_SIZE - effSizeMe, ny0 + sdy * need));
@@ -975,9 +972,16 @@ io.on('connection', (socket) => {
                     lastUpdate.set(hitOther.id, now);
 
 
-                    // Apply collision damage to both sharks (no cooldown)
-                    me.hp = Math.max(0, (me.hp ?? 100) - SHARK_COLLISION_DAMAGE);
-                    hitOther.hp = Math.max(0, (hitOther.hp ?? 100) - SHARK_COLLISION_DAMAGE);
+                    // Apply collision damage to both sharks (with cooldown per pair)
+                    const ids = [me.id, hitOther.id].sort();
+                    const key = ids.join(':');
+                    const lastDamageAt = lastCollisionDamageAt.get(key) || 0;
+                    if (now - lastDamageAt >= SHARK_COLLISION_COOLDOWN_MS) {
+                      me.hp = Math.max(0, (me.hp ?? 100) - SHARK_COLLISION_DAMAGE);
+                      hitOther.hp = Math.max(0, (hitOther.hp ?? 100) - SHARK_COLLISION_DAMAGE);
+
+                      lastCollisionDamageAt.set(key, now);
+                    }
 
                     console.log(`Collision: ${me.username} (${me.hp}HP) <-> ${hitOther.username} (${hitOther.hp}HP)`);
 
@@ -988,8 +992,8 @@ io.on('connection', (socket) => {
                     // Emit collision event to both players for visual effects
                     const meSock = io.sockets.sockets.get(me.id);
                     const otherSock = io.sockets.sockets.get(hitOther.id);
-                    if (meSock) meSock.emit('shark:collision', { damage: SHARK_COLLISION_DAMAGE });
-                    if (otherSock) otherSock.emit('shark:collision', { damage: SHARK_COLLISION_DAMAGE });
+                    if (meSock) meSock.emit('shark:collision', { damage: SHARK_COLLISION_DAMAGE, x: nx, y: ny });
+                    if (otherSock) otherSock.emit('shark:collision', { damage: SHARK_COLLISION_DAMAGE, x: ox0, y: oy0 });
 
                     dirty = true; // HP changed, need to broadcast
 
