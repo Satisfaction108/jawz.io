@@ -562,80 +562,102 @@ function sharkCollidesWithShark(shark1: Player, shark2: Player): boolean {
   const mask2 = getPlayerMask(shark2);
   if (!mask1 || !mask2) return false;
 
-  // Coarse prune: check if bounding circles overlap (respect per-shark scale)
   const sf1 = getSharkScaleForType(shark1.sharkType);
   const sf2 = getSharkScaleForType(shark2.sharkType);
-  const cx1 = shark1.x + SHARK_HALF * sf1, cy1 = shark1.y + SHARK_HALF * sf1;
-  const cx2 = shark2.x + SHARK_HALF * sf2, cy2 = shark2.y + SHARK_HALF * sf2;
+
+  // Coarse prune: sum of radii at current scale with a small safety pad (helps big sharks)
+  const r1 = SHARK_HALF * sf1;
+  const r2 = SHARK_HALF * sf2;
+  const cx1 = shark1.x + r1, cy1 = shark1.y + r1;
+  const cx2 = shark2.x + r2, cy2 = shark2.y + r2;
   const dx = cx2 - cx1, dy = cy2 - cy1;
-  const maxR = SHARK_HALF * (sf1 + sf2) + 20;
+  const pad = Math.max(6, Math.round(6 * Math.max(sf1, sf2))); // more slack at high scales
+  const maxR = r1 + r2 + pad;
   if ((dx * dx + dy * dy) > (maxR * maxR)) return false;
 
-  // Setup transforms for both sharks
+  // Setup transforms matching client: world = center + rotate(angle+PI) * (flipY * local)
   const a1 = shark1.angle;
   let deg1 = (a1 * 180 / Math.PI) % 360; if (deg1 < 0) deg1 += 360;
   const flipY1 = (deg1 > 270 || deg1 < 90) ? -1 : 1;
   const rot1 = a1 + Math.PI;
-  const cos1Inv = Math.cos(-rot1), sin1Inv = Math.sin(-rot1);
+  const cos1Inv = Math.cos(-rot1), sin1Inv = Math.sin(-rot1); // inverse for mapping world->mask1
   const scale1 = SHARK_SCALE * sf1;
 
   const a2 = shark2.angle;
   let deg2 = (a2 * 180 / Math.PI) % 360; if (deg2 < 0) deg2 += 360;
   const flipY2 = (deg2 > 270 || deg2 < 90) ? -1 : 1;
   const rot2 = a2 + Math.PI;
-  const cos2 = Math.cos(rot2), sin2 = Math.sin(rot2);
+  const cos2 = Math.cos(rot2), sin2 = Math.sin(rot2); // forward for mask2->world
   const scale2 = SHARK_SCALE * sf2;
 
-  // Choose step in mask pixels so that sampling spacing in WORLD space is <= 1px
-  const step2 = Math.max(1, Math.floor(1 / Math.max(0.0001, scale2)));
-  const step1 = Math.max(1, Math.floor(1 / Math.max(0.0001, scale1)));
+  // Choose sampling step so the step in world space ~1px (denser for reliable baby + large sharks)
+  const stepFor = (sf: number) => Math.max(1, Math.floor(1 / (SHARK_SCALE * sf)));
+  const step1 = stepFor(sf1);
+  const step2 = stepFor(sf2);
 
-  // Helper: test mask A (world from shark2) against B (mask of shark1)
-  const testAIntoB = (
-    useStep: number,
-    sampleMask: Uint8Array,
-    sScale: number,
-    sFlipY: number,
-    sCos: number,
-    sSin: number,
-    sCx: number,
-    sCy: number,
-    dCosInv: number,
-    dSinInv: number,
-    dScale: number,
-    dFlipY: number,
-    dCx: number,
-    dCy: number,
-    dstMask: Uint8Array
+  // Neighborhood kernel increases for very large sharks to reduce misses on thin parts
+  const kernelFor = (sf: number) => (sf >= 1.28 ? 3 : sf >= 1.15 ? 2 : 1); // 3=>7x7, 2=>5x5, 1=>3x3
+  const k1 = kernelFor(sf1);
+  const k2 = kernelFor(sf2);
+
+  // Helper: sample src mask, project to dst mask, return true on first colored-over-colored hit
+  const samplesHit = (
+    srcMask: Uint8Array,
+    srcCenterX: number, srcCenterY: number,
+    srcCos: number, srcSin: number, srcFlipY: number, srcScale: number,
+    dstMask: Uint8Array,
+    dstCenterX: number, dstCenterY: number,
+    dstCosInv: number, dstSinInv: number, dstFlipY: number, dstScale: number,
+    step: number, kernel: number
   ): boolean => {
-    for (let my = 0; my < SHARK_MASK_SIZE; my += useStep) {
-      for (let mx = 0; mx < SHARK_MASK_SIZE; mx += useStep) {
-        if (sampleMask[my * SHARK_MASK_SIZE + mx] === 0) continue;
-        const lx = (mx - SHARK_MASK_SIZE / 2) * sScale;
-        const ly = (my - SHARK_MASK_SIZE / 2) * sScale * sFlipY;
-        // World position comes from SOURCE shark (sCx/sCy)
-        const wx = sCx + (lx * sCos - ly * sSin);
-        const wy = sCy + (lx * sSin + ly * sCos);
-        // Transform to DEST shark local space (subtract dest center)
-        const vx = wx - dCx;
-        const vy = wy - dCy;
-        const rx = dCosInv * vx - dSinInv * vy;
-        const ry = dSinInv * vx + dCosInv * vy;
-        // Apply dest flip
-        const lx1 = rx;
-        const ly1 = ry * dFlipY;
-        const mx1 = Math.round((lx1 / dScale) + (SHARK_MASK_SIZE / 2));
-        const my1 = Math.round((ly1 / dScale) + (SHARK_MASK_SIZE / 2));
-        if (mx1 >= 0 && my1 >= 0 && mx1 < SHARK_MASK_SIZE && my1 < SHARK_MASK_SIZE) {
-          if (dstMask[my1 * SHARK_MASK_SIZE + mx1] !== 0) return true;
-          // 5x5 neighborhood
-          for (let oy = -2; oy <= 2; oy++) {
-            for (let ox = -2; ox <= 2; ox++) {
-              const tx = mx1 + ox, ty = my1 + oy;
-              if (tx >= 0 && ty >= 0 && tx < SHARK_MASK_SIZE && ty < SHARK_MASK_SIZE) {
-                if (dstMask[ty * SHARK_MASK_SIZE + tx] !== 0) return true;
-              }
+    for (let my = 0; my < SHARK_MASK_SIZE; my += step) {
+      for (let mx = 0; mx < SHARK_MASK_SIZE; mx += step) {
+        if (srcMask[my * SHARK_MASK_SIZE + mx] === 0) continue; // only colored pixels
+
+        // Local (mask) -> local (world) in px
+        const lx = (mx - SHARK_MASK_SIZE / 2) * srcScale;
+        const ly = (my - SHARK_MASK_SIZE / 2) * srcScale;
+
+        // Apply flip in local space, then rotation to world
+        const lyF = ly * srcFlipY;
+        const wx = srcCenterX + (lx * srcCos - lyF * srcSin);
+        const wy = srcCenterY + (lx * srcSin + lyF * srcCos);
+
+        // World -> dst local (inverse rotation then inverse flip)
+        const vx = wx - dstCenterX;
+        const vy = wy - dstCenterY;
+        const rx = dstCosInv * vx - dstSinInv * vy;
+        const ry = dstSinInv * vx + dstCosInv * vy;
+        const lxD = rx;
+        const lyD = ry * dstFlipY;
+
+        // dst mask coordinates
+        const mxD = (lxD / dstScale) + (SHARK_MASK_SIZE / 2);
+        const myD = (lyD / dstScale) + (SHARK_MASK_SIZE / 2);
+        const xi = Math.round(mxD);
+        const yi = Math.round(myD);
+        if (xi >= 0 && yi >= 0 && xi < SHARK_MASK_SIZE && yi < SHARK_MASK_SIZE) {
+          if (dstMask[yi * SHARK_MASK_SIZE + xi] !== 0) return true;
+          // Check neighborhood (adaptive kernel)
+          for (let oy = -kernel; oy <= kernel; oy++) {
+            for (let ox = -kernel; ox <= kernel; ox++) {
+              const tx = xi + ox, ty = yi + oy;
+              if (tx < 0 || ty < 0 || tx >= SHARK_MASK_SIZE || ty >= SHARK_MASK_SIZE) continue;
+              if (dstMask[ty * SHARK_MASK_SIZE + tx] !== 0) return true;
             }
+          }
+          // Additional sub-pixel sampling to catch fractional mapping at large scales
+          const fracOffsets = [
+            { dx: -0.45, dy: -0.45 }, { dx: 0.45, dy: -0.45 },
+            { dx: -0.45, dy: 0.45 },  { dx: 0.45, dy: 0.45 },
+            { dx: 0.0,  dy: -0.5 },   { dx: 0.0,  dy: 0.5 },
+            { dx: -0.5, dy: 0.0 },    { dx: 0.5,  dy: 0.0 }
+          ];
+          for (const off of fracOffsets) {
+            const sx = Math.round(mxD + off.dx);
+            const sy = Math.round(myD + off.dy);
+            if (sx < 0 || sy < 0 || sx >= SHARK_MASK_SIZE || sy >= SHARK_MASK_SIZE) continue;
+            if (dstMask[sy * SHARK_MASK_SIZE + sx] !== 0) return true;
           }
         }
       }
@@ -643,13 +665,19 @@ function sharkCollidesWithShark(shark1: Player, shark2: Player): boolean {
     return false;
   };
 
-  // Pass 1: sample shark2 into shark1
-  if (testAIntoB(step2, mask2, scale2, flipY2, cos2, sin2, cx2, cy2, cos1Inv, sin1Inv, scale1, flipY1, cx1, cy1, mask1)) return true;
-  // Pass 2: sample shark1 into shark2 (symmetric), swap roles
+  // Check both directions to avoid misses on thin geometry
+  if (samplesHit(mask2, cx2, cy2, cos2, sin2, flipY2, scale2,
+                 mask1, cx1, cy1, cos1Inv, sin1Inv, flipY1, scale1,
+                 step2, k1)) return true;
+
+  // Also sample mask1 against mask2 (swap roles)
   const cos1 = Math.cos(rot1), sin1 = Math.sin(rot1);
   const cos2Inv = Math.cos(-rot2), sin2Inv = Math.sin(-rot2);
-  const result = testAIntoB(step1, mask1, scale1, flipY1, cos1, sin1, cx1, cy1, cos2Inv, sin2Inv, scale2, flipY2, cx2, cy2, mask2);
-  return result;
+  if (samplesHit(mask1, cx1, cy1, cos1, sin1, flipY1, scale1,
+                 mask2, cx2, cy2, cos2Inv, sin2Inv, flipY2, scale2,
+                 step1, k2)) return true;
+
+  return false;
 }
 
 // --- Damage tracking and kill/assist awarding ---
