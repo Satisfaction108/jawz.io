@@ -473,11 +473,13 @@
   border-radius: 12px;
   background: linear-gradient(135deg, rgba(8,12,20,.72), rgba(10,14,24,.68));
   border: 1px solid rgba(255,255,255,0.12);
-  display: grid;
-  grid-template-columns: auto 1fr;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
+  text-align: center;
+  gap: 6px;
   min-width: 140px;
+  max-width: 200px;
   box-shadow: var(--shadow), 0 0 16px rgba(0, 180, 255, 0.18);
 }
 .shark-chip__label {
@@ -488,7 +490,6 @@
   text-shadow: 0 0 6px rgba(0, 200, 255, 0.5);
 }
 .shark-chip__value {
-  justify-self: end;
   font-weight: 800;
   font-size: 14px;
   color: #dff2ff;
