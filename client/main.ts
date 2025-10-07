@@ -51,6 +51,8 @@ let scoreFill: HTMLElement;
 let scoreText: HTMLElement;
 let levelFill: HTMLElement;
 let levelText: HTMLElement;
+let sharkNameEl: HTMLElement;
+
 
 let projectileLayer: HTMLDivElement;
 let projectiles: Record<number, { x: number; y: number }> = {};
@@ -94,6 +96,8 @@ const lastHpById = new Map<string, number>();
 const lastTrailTimeById = new Map<string, number>();
 const lastPosById = new Map<string, { x: number; y: number }>();
 let lastScoreSelf = 0;
+let lastSharkNameSelf = '';
+
 
 function addScreenShake(intensity: number) {
   if (!FX.damageShake) return;
@@ -476,6 +480,11 @@ const sharkScales = new Map<string, number>();
 const evolutionPrevSharkType = new Map<string, string>();
 const evolutionHoldUntil = new Map<string, number>();
 
+// Collision masks for visualization (debug mode)
+const sharkMasks = new Map<string, Uint8Array>();
+let maskSize = 256;
+let showCollisionMasks = false; // Toggle with 'M' key
+
 function computeTailAnchorFromAlpha(alpha: Uint8ClampedArray, size: number): { x: number; y: number } {
   const A = (x: number, y: number) => alpha[(y * size + x) * 4 + 3];
   let maxX = -1;
@@ -526,112 +535,83 @@ function loadCollisionMaps(): Promise<void> {
     let loaded = 0;
     const done = () => { if (++loaded === 2) { imagesReady = true; resolve(); } };
 
-    // Shark (256x256). Prefer provided binary text mask; fallback to legacy masks or image alpha
+    // Shark (256x256). Generate mask from PNG alpha channel
     (async () => {
-      const tryPaths = [
-        '/sharks/baby%20shark.txt',               // exact provided file
-        '/sharks/Baby%20Shark.mask.txt',          // legacy optional
-        '/sharks/baby-shark-mask.txt'             // legacy optional
-      ];
-      let usedMask = false;
-      for (const p of tryPaths) {
-        try {
-          const res = await fetch(p);
-          if (res.ok) {
-            const txt = await res.text();
-            const s = SHARK_MASK_SIZE; // Use mask size (256), not render size
-            // Strip everything except 0/1 and newlines, then flatten
-            const flat = txt.replace(/[^01\n]/g, '').replace(/\n+/g, '');
-            if (flat.length >= s * s) {
-              const data = new Uint8ClampedArray(s * s * 4);
-              for (let i = 0; i < s * s; i++) {
-                const v = flat.charCodeAt(i) === 49 /* '1' */ ? 255 : 0;
-                const off = i * 4;
-                data[off] = 0; data[off+1] = 0; data[off+2] = 0; data[off+3] = v;
-              }
-              sharkAlpha = data;
-              // Compute tail anchor + edge from mask (sprite is left-facing by default; tail is the rightmost opaque edge)
-              tailAnchor = computeTailAnchorFromAlpha(sharkAlpha, SHARK_MASK_SIZE);
-              tailEdge = computeTailEdgeFromAlpha(sharkAlpha, SHARK_MASK_SIZE);
-              usedMask = true;
-              break;
-            }
-          }
-        } catch {}
-      }
-      if (!usedMask) {
-        const sharkImg = new Image(); sharkImg.src = '/sharks/Baby%20Shark.png';
-        sharkImg.onload = () => {
-          // Use SHARK_MASK_SIZE (256) for collision detection, not render size
-          const c = document.createElement('canvas'); c.width = SHARK_MASK_SIZE; c.height = SHARK_MASK_SIZE;
-          const cctx = c.getContext('2d')!;
-          cctx.clearRect(0,0,SHARK_MASK_SIZE,SHARK_MASK_SIZE);
-          const nw = sharkImg.naturalWidth || sharkImg.width;
-          const nh = sharkImg.naturalHeight || sharkImg.height;
-          const scale = Math.max(SHARK_MASK_SIZE / nw, SHARK_MASK_SIZE / nh); // cover
-          const dw = nw * scale, dh = nh * scale;
-          const dx = (SHARK_MASK_SIZE - dw) / 2, dy = (SHARK_MASK_SIZE - dh) / 2; // centered
-          cctx.drawImage(sharkImg, dx, dy, dw, dh);
-          sharkAlpha = cctx.getImageData(0, 0, SHARK_MASK_SIZE, SHARK_MASK_SIZE).data; // RGBA
-          // Compute tail anchor + edge from image alpha if text mask not provided
-          tailAnchor = computeTailAnchorFromAlpha(sharkAlpha, SHARK_MASK_SIZE);
-          tailEdge = computeTailEdgeFromAlpha(sharkAlpha, SHARK_MASK_SIZE);
-          done();
-        };
-        return; // wait for onload -> done()
-      }
-      // Mask path succeeded
-      done();
+      const sharkImg = new Image();
+      sharkImg.src = '/sharks/Baby%20Shark.png';
+      sharkImg.onload = () => {
+        // Use SHARK_MASK_SIZE (256) for collision detection, not render size
+        const c = document.createElement('canvas');
+        c.width = SHARK_MASK_SIZE;
+        c.height = SHARK_MASK_SIZE;
+        const cctx = c.getContext('2d')!;
+        cctx.clearRect(0, 0, SHARK_MASK_SIZE, SHARK_MASK_SIZE);
+        const nw = sharkImg.naturalWidth || sharkImg.width;
+        const nh = sharkImg.naturalHeight || sharkImg.height;
+        const scale = Math.max(SHARK_MASK_SIZE / nw, SHARK_MASK_SIZE / nh); // cover
+        const dw = nw * scale, dh = nh * scale;
+        const dx = (SHARK_MASK_SIZE - dw) / 2, dy = (SHARK_MASK_SIZE - dh) / 2; // centered
+        cctx.drawImage(sharkImg, dx, dy, dw, dh);
+        sharkAlpha = cctx.getImageData(0, 0, SHARK_MASK_SIZE, SHARK_MASK_SIZE).data; // RGBA
+        // Compute tail anchor + edge from image alpha
+        tailAnchor = computeTailAnchorFromAlpha(sharkAlpha, SHARK_MASK_SIZE);
+        tailEdge = computeTailEdgeFromAlpha(sharkAlpha, SHARK_MASK_SIZE);
+        console.log('✓ Generated shark mask from PNG alpha channel');
+        done();
+      };
+      sharkImg.onerror = () => {
+        console.error('✗ Failed to load Baby Shark.png');
+        done();
+      };
     })();
 
-    // Food alpha: read provided 64x64 binary mask and resample to render size
+    // Food alpha: generate mask from PNG alpha channel
     (async () => {
       const target = FISHFOOD_SIZE;
-      let ok = false;
-      try {
-        const res = await fetch('/food/FishFood.txt');
-        if (res.ok) {
-          const txt = await res.text();
-          const flat = txt.replace(/[^01\n]/g, '').replace(/\n+/g, '');
-          const srcW = 64, srcH = 64;
-          if (flat.length >= srcW * srcH) {
-            const srcCanvas = document.createElement('canvas'); srcCanvas.width = srcW; srcCanvas.height = srcH;
-            const sctx = srcCanvas.getContext('2d')!;
-            const img = sctx.createImageData(srcW, srcH);
-            for (let i = 0; i < srcW * srcH; i++) {
-              const v = flat.charCodeAt(i) === 49 /* '1' */ ? 255 : 0;
-              const off = i * 4;
-              img.data[off] = 0; img.data[off+1] = 0; img.data[off+2] = 0; img.data[off+3] = v;
-            }
-            sctx.putImageData(img, 0, 0);
-            // Scale to target size
-            const dstCanvas = document.createElement('canvas'); dstCanvas.width = target; dstCanvas.height = target;
-            const dctx = dstCanvas.getContext('2d')!;
-            dctx.clearRect(0, 0, target, target);
-            // Use nearest-neighbor like scaling for crisp mask
-            (dctx as any).imageSmoothingEnabled = false;
-            dctx.drawImage(srcCanvas, 0, 0, target, target);
-            const id = dctx.getImageData(0, 0, target, target);
-            foodAlpha = id.data;
-            foodAlphaSize = target;
-            ok = true;
-          }
-        }
-      } catch {}
-      if (!ok) {
+      const foodImg = new Image();
+      foodImg.src = '/food/FishFood.png';
+      foodImg.onload = () => {
+        // Load at 64x64 then scale to target size
+        const srcW = 64, srcH = 64;
+        const srcCanvas = document.createElement('canvas');
+        srcCanvas.width = srcW;
+        srcCanvas.height = srcH;
+        const sctx = srcCanvas.getContext('2d')!;
+        sctx.clearRect(0, 0, srcW, srcH);
+        sctx.drawImage(foodImg, 0, 0, srcW, srcH);
+
+        // Scale to target size
+        const dstCanvas = document.createElement('canvas');
+        dstCanvas.width = target;
+        dstCanvas.height = target;
+        const dctx = dstCanvas.getContext('2d')!;
+        dctx.clearRect(0, 0, target, target);
+        // Use nearest-neighbor scaling for crisp mask
+        (dctx as any).imageSmoothingEnabled = false;
+        dctx.drawImage(srcCanvas, 0, 0, target, target);
+        const id = dctx.getImageData(0, 0, target, target);
+        foodAlpha = id.data;
+        foodAlphaSize = target;
+        console.log('✓ Generated food mask from PNG alpha channel');
+        done();
+      };
+      foodImg.onerror = () => {
+        console.error('✗ Failed to load FishFood.png, using fallback circle');
         // Fallback: procedural circle
         const s = target;
-        const c = document.createElement('canvas'); c.width = s; c.height = s;
+        const c = document.createElement('canvas');
+        c.width = s;
+        c.height = s;
         const cctx = c.getContext('2d')!;
-        cctx.clearRect(0,0,s,s);
+        cctx.clearRect(0, 0, s, s);
         cctx.beginPath();
-        cctx.arc(s/2, s/2, s/2, 0, Math.PI * 2);
+        cctx.arc(s / 2, s / 2, s / 2, 0, Math.PI * 2);
         cctx.fillStyle = '#ffffff';
         cctx.fill();
         foodAlpha = cctx.getImageData(0, 0, s, s).data;
         foodAlphaSize = s;
-      }
-      done();
+        done();
+      };
     })();
   });
 }
@@ -650,16 +630,20 @@ function requestEat(foodId: number) {
 
 function pixelPerfectHit(me: Player, food: Food): boolean {
   if (!imagesReady || !sharkAlpha || !foodAlpha) return false;
+  // Respect per-shark visual scale (evolution sizing)
+  const key = me.sharkType || 'Baby Shark.png';
+  const s = sharkScales.get(key) || 1;
+
   // Quick circle check first (slightly more forgiving)
-  const cx = me.x + SHARK_HALF, cy = me.y + SHARK_HALF;
+  const cx = me.x + SHARK_HALF * s, cy = me.y + SHARK_HALF * s;
   const dx = cx - food.x, dy = cy - food.y;
-  const maxDist = SHARK_HALF + FOOD_RADIUS + 20; // increased tolerance
+  const maxDist = SHARK_HALF * s + FOOD_RADIUS + 20; // increased tolerance
   if ((dx*dx + dy*dy) > (maxDist*maxDist)) return false;
 
   const rot = me.angle + Math.PI;
   const cos = Math.cos(rot), sin = Math.sin(rot);
 
-  const sSize = SHARK_MASK_SIZE; // Use mask size (256), not render size (171)
+  const sSize = SHARK_MASK_SIZE; // Use mask size (256)
   const fSize = foodAlphaSize;
   const halfF = FOOD_RADIUS;
 
@@ -681,9 +665,10 @@ function pixelPerfectHit(me: Player, food: Food): boolean {
       // rotate by -rot: x' = x cos + y sin ; y' = -x sin + y cos
       const lx = vx * cos + vy * sin;
       const ly = -vx * sin + vy * cos;
-      // Scale to mask space (mask is 256x256, shark renders at 171x171)
-      const sx = Math.round((lx / SHARK_SCALE) + sSize / 2);
-      const sy = Math.round((ly / SHARK_SCALE) + sSize / 2);
+      // Scale to mask space using visual scale
+      const scale = SHARK_SCALE * s;
+      const sx = Math.round((lx / scale) + sSize / 2);
+      const sy = Math.round((ly / scale) + sSize / 2);
       // 5x5 neighborhood for better collision detection with scaled sprites
       for (let oy = -2; oy <= 2; oy++) {
         for (let ox = -2; ox <= 2; ox++) {
@@ -699,10 +684,12 @@ function pixelPerfectHit(me: Player, food: Food): boolean {
 function checkEatCollisions() {
   if (!socket || !selfId) return;
   const me = players[selfId]; if (!me) return;
+  const key = me.sharkType || 'Baby Shark.png';
+  const s = sharkScales.get(key) || 1;
   for (const f of Object.values(foods)) {
-    // coarse range filter
-    const dx = (me.x + SHARK_HALF) - f.x; const dy = (me.y + SHARK_HALF) - f.y;
-    const maxR = SHARK_HALF + FOOD_RADIUS + 16;
+    // coarse range filter with visual scale
+    const dx = (me.x + SHARK_HALF * s) - f.x; const dy = (me.y + SHARK_HALF * s) - f.y;
+    const maxR = SHARK_HALF * s + FOOD_RADIUS + 16;
     if ((dx*dx + dy*dy) > (maxR*maxR)) continue;
     if (pixelPerfectHit(me, f)) {
       requestEat(f.id);
@@ -894,10 +881,16 @@ function updateCameraToSelf() {
   const vh = window.innerHeight;
 
   // Calculate desired camera position (centered on shark, respecting scale)
-  const keySelf = self.sharkType || 'Baby Shark.png';
+  // Use the currently DISPLAYED shark type during evolution hold to keep centering correct
+  let keySelf = self.sharkType || 'Baby Shark.png';
+  const holdSelf = evolutionHoldUntil.get(self.id || selfId!) || 0;
+  if (performance.now() < holdSelf) {
+    const prev = evolutionPrevSharkType.get(self.id || selfId!);
+    if (prev) keySelf = prev;
+  }
   const sSelf = sharkScales.get(keySelf) || 1;
-  let cx = Math.round((vw / 2) - (self.x + SHARK_HALF * sSelf) * z);
-  let cy = Math.round((vh / 2) - (self.y + SHARK_HALF * sSelf) * z);
+  let cx = (vw / 2) - (self.x + SHARK_HALF * sSelf) * z;
+  let cy = (vh / 2) - (self.y + SHARK_HALF * sSelf) * z;
 
   // Apply camera limits to prevent showing borders
   // The world is MAP_SIZE x MAP_SIZE, scaled by CAMERA_ZOOM
@@ -932,7 +925,7 @@ function applyCameraTransform() {
   const sx = shakeMag ? (Math.random() * 2 - 1) * shakeMag : 0;
   const sy = shakeMag ? (Math.random() * 2 - 1) * shakeMag : 0;
   shakeMag *= 0.90;
-  world.style.transform = `translate3d(${Math.round(camera.x + sx)}px, ${Math.round(camera.y + sy)}px, 0) scale(${CAMERA_ZOOM})`;
+  world.style.transform = `translate3d(${(camera.x + sx)}px, ${(camera.y + sy)}px, 0) scale(${CAMERA_ZOOM})`;
 }
 
 function ensureSharkEl(id: string, username: string) {
@@ -974,7 +967,7 @@ function ensureFoodEl(food: Food) {
     el.style.height = `${FISHFOOD_SIZE}px`;
     world.appendChild(el);
   }
-  el.style.transform = `translate(${Math.round(food.x - FISHFOOD_SIZE / 2)}px, ${Math.round(food.y - FISHFOOD_SIZE / 2)}px)`;
+  el.style.transform = `translate(${(food.x - FISHFOOD_SIZE / 2)}px, ${(food.y - FISHFOOD_SIZE / 2)}px)`;
   foodEls.set(food.id, el);
   return el;
 }
@@ -1054,7 +1047,7 @@ function render() {
     // Position and scale container (name/HP remain upright since rotation is on image only)
     const keyType = p.sharkType || 'Baby Shark.png';
     const s = sharkScales.get(keyType) || 1;
-    el.style.transform = `translate3d(${Math.round(p.x)}px, ${Math.round(p.y)}px, 0) scale(${s})`;
+    el.style.transform = `translate3d(${(p.x)}px, ${(p.y)}px, 0) scale(${s})`;
     if (s >= 1.32) el.classList.add('shark--apex'); else el.classList.remove('shark--apex');
     // Rotate/mirror only the shark image so the label remains upright and unflipped
     const a = p.angle;
@@ -1091,6 +1084,75 @@ function render() {
       imgEl.style.transform = tr;
       if (flashEl) flashEl.style.transform = tr;
         if (glowEl) glowEl.style.transform = tr;
+
+      // Collision mask visualization overlay (debug mode)
+      if (showCollisionMasks) {
+        let maskCanvas = el.querySelector('.shark__mask-overlay') as HTMLCanvasElement | null;
+        if (!maskCanvas) {
+          maskCanvas = document.createElement('canvas');
+          maskCanvas.className = 'shark__mask-overlay';
+          maskCanvas.width = SHARK_SIZE;
+          maskCanvas.height = SHARK_SIZE;
+          maskCanvas.style.cssText = `
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: ${SHARK_SIZE}px;
+            height: ${SHARK_SIZE}px;
+            pointer-events: none;
+            z-index: 100;
+            opacity: 0.5;
+          `;
+          imgEl.parentElement?.appendChild(maskCanvas);
+        }
+
+        // Render the collision mask
+        const mask = sharkMasks.get(sharkType);
+        if (mask && maskCanvas) {
+          const ctx = maskCanvas.getContext('2d');
+          if (ctx) {
+            ctx.clearRect(0, 0, SHARK_SIZE, SHARK_SIZE);
+
+            // Create ImageData for the mask
+            const imageData = ctx.createImageData(SHARK_SIZE, SHARK_SIZE);
+            const data = imageData.data;
+
+            // Scale mask to render size and apply same transform as shark
+            for (let y = 0; y < SHARK_SIZE; y++) {
+              for (let x = 0; x < SHARK_SIZE; x++) {
+                // Map render pixel to mask pixel
+                const maskX = Math.floor((x / SHARK_SIZE) * maskSize);
+                const maskY = Math.floor((y / SHARK_SIZE) * maskSize);
+                const maskIdx = maskY * maskSize + maskX;
+
+                const pixelIdx = (y * SHARK_SIZE + x) * 4;
+                if (mask[maskIdx] !== 0) {
+                  // Opaque pixel - show in cyan
+                  data[pixelIdx] = 0;       // R
+                  data[pixelIdx + 1] = 255; // G
+                  data[pixelIdx + 2] = 255; // B
+                  data[pixelIdx + 3] = 180; // A
+                } else {
+                  // Transparent pixel - show in red (very faint)
+                  data[pixelIdx] = 255;     // R
+                  data[pixelIdx + 1] = 0;   // G
+                  data[pixelIdx + 2] = 0;   // B
+                  data[pixelIdx + 3] = 30;  // A (very transparent)
+                }
+              }
+            }
+
+            ctx.putImageData(imageData, 0, 0);
+
+            // Apply same transform as shark image
+            maskCanvas.style.transform = tr;
+          }
+        }
+      } else {
+        // Remove mask overlay if it exists
+        const maskCanvas = el.querySelector('.shark__mask-overlay');
+        if (maskCanvas) maskCanvas.remove();
+      }
     }
     // Health bar update
     const hpEl = el.querySelector('.shark__hpFill') as HTMLDivElement | null;
@@ -1196,6 +1258,17 @@ function render() {
         levelText.textContent = String(lvl);
       }
     }
+
+	    // Current shark label (update only on change)
+	    if (sharkNameEl) {
+	      const st = self.sharkType || 'Baby Shark.png';
+	      const name = st.replace(/\.png$/i, '');
+	      if (name !== lastSharkNameSelf) {
+	        sharkNameEl.textContent = name;
+	        lastSharkNameSelf = name;
+	      }
+	    }
+
   }
 
   // Minimap - optimized to update less frequently (150ms instead of 100ms)
@@ -1333,8 +1406,19 @@ function bindGameInteractions(container: HTMLElement) {
 
   // Spacebar hold-to-fire
   window.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (!gameEl || gameEl.classList.contains('hidden')) return;
     const key = e.key;
+
+    // Toggle collision mask visualization with 'M' key (works even in menu)
+    if (key === 'm' || key === 'M') {
+      showCollisionMasks = !showCollisionMasks;
+      console.log(`🎯 Collision mask overlay: ${showCollisionMasks ? 'ON ✓' : 'OFF ✗'}`);
+      console.log(`   Masks loaded: ${sharkMasks.size} sharks`);
+      console.log(`   Mask size: ${maskSize}x${maskSize}`);
+      e.preventDefault();
+      return;
+    }
+
+    if (!gameEl || gameEl.classList.contains('hidden')) return;
     if (key === ' ' || key === 'Spacebar') { e.preventDefault(); startHoldFire(); }
   });
   window.addEventListener('keyup', (e: KeyboardEvent) => {
@@ -1608,6 +1692,34 @@ function startGame(username: string) {
     } catch {}
   });
 
+  // Collision masks for visualization (debug mode)
+  socket.on('masks:init', (data: { masks: Record<string, string>; size: number }) => {
+    console.log('📦 Received masks:init event', data ? `${Object.keys(data.masks || {}).length} masks` : 'no data');
+    try {
+      if (data && data.masks && typeof data.size === 'number') {
+        maskSize = data.size;
+        let loadedCount = 0;
+        for (const [sharkType, base64Mask] of Object.entries(data.masks)) {
+          // Decode base64 to Uint8Array
+          const binaryString = atob(base64Mask);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          sharkMasks.set(sharkType, bytes);
+          loadedCount++;
+        }
+        console.log(`✅ Loaded ${loadedCount} collision masks for visualization (size: ${maskSize}x${maskSize})`);
+        console.log(`   Shark types: ${Array.from(sharkMasks.keys()).slice(0, 3).join(', ')}...`);
+        console.log('🎮 Press M to toggle collision mask overlay');
+      } else {
+        console.warn('⚠️ Invalid masks:init data:', data);
+      }
+    } catch (e) {
+      console.error('❌ Failed to load collision masks:', e);
+    }
+  });
+
   socket.on('server:pong', (t0: number) => {
     const rtt = Math.max(0, performance.now() - t0);
     msEMA = msEMA ? (msEMA * 0.7 + rtt * 0.3) : rtt;
@@ -1671,11 +1783,17 @@ function startGame(username: string) {
   socket.on('effect:smoke', (data: { x: number; y: number; playerId: string; s?: number }) => {
     try {
       const p = players[data.playerId];
-      const key = p?.sharkType || 'Baby Shark.png';
-      const sEvt = (typeof data.s === 'number' && data.s > 0) ? data.s : undefined;
+      // Use the scale of the CURRENTLY DISPLAYED sprite (handles evolution hold)
+      let key = p?.sharkType || 'Baby Shark.png';
+      if (p) {
+        const hold = evolutionHoldUntil.get(p.id) || 0;
+        if (performance.now() < hold) {
+          const prev = evolutionPrevSharkType.get(p.id);
+          if (prev) key = prev;
+        }
+      }
       const sLocal = sharkScales.get(key) || 1;
-      const s = sEvt ?? sLocal;
-      spawnEvolutionSmoke(data.x, data.y, s);
+      spawnEvolutionSmoke(data.x, data.y, sLocal);
     } catch (e) {
       console.error('Smoke effect error:', e);
     }
@@ -1722,15 +1840,15 @@ function addKillFeedItem(payload: any) {
   item.innerHTML = html;
   el.prepend(item);
 
-  // Only remove oldest item when feed overflows (max 6 items)
+  // Only remove oldest item when feed overflows (max 4 items)
   // No auto-delete timeout - items stay until pushed out by new kills
-  if (el.children.length > 6) {
+  if (el.children.length > 4) {
     const oldest = el.lastElementChild;
     if (oldest) {
       oldest.classList.add('feed-item--removing');
       oldest.animate([
         { opacity: 1, transform: 'translateX(0)' },
-        { opacity: 0, transform: 'translateX(20px)' }
+        { opacity: 0, transform: 'translateX(-20px)' }
       ], { duration: 200, easing: 'ease-out' }).onfinish = () => {
         oldest.remove();
       };
@@ -1766,6 +1884,8 @@ function main() {
   levelText = document.getElementById('level-text')!;
   scoreFill = document.getElementById('score-fill')!;
   scoreText = document.getElementById('score-text')!;
+  sharkNameEl = document.getElementById('shark-name')!;
+
 
   projectileLayer = document.getElementById('projectiles') as HTMLDivElement;
   deathOverlay = document.getElementById('death-overlay') as HTMLDivElement;

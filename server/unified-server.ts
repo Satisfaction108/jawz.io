@@ -4,6 +4,11 @@ import { promises as fsp } from 'fs';
 import * as path from 'path';
 import { extname, join, normalize } from 'path';
 import { createReadStream, existsSync, statSync } from 'fs';
+import {
+  generateMaskFromPNG,
+  computeMouthAnchorFromMask,
+  computeTailAnchorFromMask
+} from './utils/maskGenerator';
 
 interface Player {
     id: string;
@@ -38,14 +43,23 @@ const FOOD_HALF = Math.floor(FOOD_SIZE / 2);
 
 
 // Visual scale per shark type (Baby -> Megalodon)
+// Linear scaling: Baby Shark (index 0) = 1.0x, Megalodon (index 19) = 2.0x
 let SHARK_EVOLUTIONS: string[] = [];
 
 function getSharkScaleForType(type: string | undefined): number {
   if (!type || !SHARK_EVOLUTIONS || SHARK_EVOLUTIONS.length === 0) return 1.0;
   const idx = SHARK_EVOLUTIONS.indexOf(type);
   if (idx < 0) return 1.0;
-  // Smooth progression: 1.00 at index 0 → ~1.38 at index 19
-  return Math.min(1.4, 1.0 + 0.02 * idx);
+
+  // Total number of shark types (20 sharks: index 0-19)
+  const totalSharks = SHARK_EVOLUTIONS.length;
+  if (totalSharks <= 1) return 1.0;
+
+  // Linear interpolation: 1.0 + (idx / (totalSharks - 1)) * (2.0 - 1.0)
+  // Baby Shark (idx=0): 1.0 + (0/19) * 1.0 = 1.0
+  // Megalodon (idx=19): 1.0 + (19/19) * 1.0 = 2.0
+  const scale = 1.0 + (idx / (totalSharks - 1)) * 1.0;
+  return Math.min(2.0, Math.max(1.0, scale));
 }
 
 async function loadSharkEvolutions(): Promise<void> {
@@ -131,19 +145,7 @@ const SHOOT_COOLDOWN_MS = 500;   // 0.5 seconds per player (reload)
 let MOUTH_OFFSET_X = 26 - (SHARK_MASK_SIZE / 2);  // fallback if mask not available
 let MOUTH_OFFSET_Y = 150 - (SHARK_MASK_SIZE / 2);
 
-function computeMouthAnchorFromMask(mask: Uint8Array, size: number): { x: number; y: number } {
-  // Find leftmost opaque edge across rows; pick median row among those near the global minX (within 2px)
-  let minX = size, rows: number[] = [];
-  const leftmost = new Array<number>(size).fill(size);
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      if (mask[y * size + x] !== 0) { leftmost[y] = x; if (x < minX) minX = x; break; }
-    }
-  }
-  for (let y = 0; y < size; y++) if (leftmost[y] <= minX + 2) rows.push(y);
-  const yMed = rows.length ? rows[Math.floor(rows.length / 2)] : Math.round(size / 2);
-  return { x: minX, y: yMed };
-}
+// computeMouthAnchorFromMask and computeTailAnchorFromMask are now imported from maskGenerator.ts
 
 // Active bubbles collection
 const bubbles: { [id: number]: Bubble } = {};
@@ -206,34 +208,16 @@ function resampleNearest(src: Uint8Array, srcW: number, srcH: number, dstW: numb
   return dst;
 }
 
-// Compute tail anchor from mask (rightmost opaque edge, median row)
-function computeTailAnchorFromMask(mask: Uint8Array, size: number): { x: number; y: number } {
-  let maxX = -1, rows: number[] = [];
-  const rightmost = new Array<number>(size).fill(-1);
-  for (let y = 0; y < size; y++) {
-    for (let x = size - 1; x >= 0; x--) {
-      if (mask[y * size + x] !== 0) {
-        rightmost[y] = x;
-        if (x > maxX) maxX = x;
-        break;
-      }
-    }
-  }
-  for (let y = 0; y < size; y++) if (rightmost[y] >= maxX - 2) rows.push(y);
-  const yMed = rows.length ? rows[Math.floor(rows.length / 2)] : Math.round(size / 2);
-  return { x: maxX, y: yMed };
-}
 
-// Load a specific shark's mask and compute mouth/tail positions
+
+// Load a specific shark's mask from PNG and compute mouth/tail positions
 async function loadSharkMask(sharkFilename: string): Promise<void> {
   if (sharkMasks.has(sharkFilename)) return; // already loaded
 
   try {
-    // Mask files are lowercase, PNG files are capitalized
-    const baseName = sharkFilename.replace('.png', '.txt').toLowerCase();
-    const maskPath = path.join('server', 'sharks', baseName);
-    const txt = await fsp.readFile(maskPath, 'utf8');
-    const mask = parseBinaryMask(txt, SHARK_MASK_SIZE, SHARK_MASK_SIZE);
+    // Generate mask from PNG alpha channel
+    const pngPath = path.join('server', 'sharks', sharkFilename);
+    const mask = await generateMaskFromPNG(pngPath, SHARK_MASK_SIZE);
     sharkMasks.set(sharkFilename, mask);
 
     // Compute mouth and tail positions
@@ -261,9 +245,9 @@ async function loadSharkMask(sharkFilename: string): Promise<void> {
       sharkTailOffsets.set(sharkFilename, { x: -mouth.x, y: mouth.y });
     }
 
-    console.log(`Loaded mask for ${sharkFilename}`);
+    console.log(`✓ Generated mask from PNG for ${sharkFilename}`);
   } catch (e) {
-    console.error(`Failed to load mask for ${sharkFilename}`, e);
+    console.error(`✗ Failed to generate mask for ${sharkFilename}`, e);
     // Use baby shark as fallback
     if (sharkMask) {
       sharkMasks.set(sharkFilename, sharkMask);
@@ -319,8 +303,9 @@ async function loadLevelProgression(): Promise<void> {
 
 async function loadServerMasks(): Promise<void> {
   try {
-    const sharkTxt = await fsp.readFile('server/sharks/baby shark.txt', 'utf8');
-    const rawShark = parseBinaryMask(sharkTxt, SHARK_MASK_SIZE, SHARK_MASK_SIZE);
+    // Generate baby shark mask from PNG
+    const babySharkPng = path.join('server', 'sharks', 'Baby Shark.png');
+    const rawShark = await generateMaskFromPNG(babySharkPng, SHARK_MASK_SIZE);
     sharkMask = rawShark;
     try {
       const mouth = computeMouthAnchorFromMask(sharkMask, SHARK_MASK_SIZE);
@@ -328,17 +313,20 @@ async function loadServerMasks(): Promise<void> {
       MOUTH_OFFSET_X = mouth.x - (SHARK_MASK_SIZE / 2);
       MOUTH_OFFSET_Y = mouth.y - (SHARK_MASK_SIZE / 2);
     } catch {}
-
+    console.log('✓ Generated baby shark mask from PNG');
   } catch (e) {
-    console.error('Failed to load shark mask from server/sharks/baby shark.txt', e);
+    console.error('✗ Failed to generate shark mask from Baby Shark.png', e);
     sharkMask = null;
   }
+
   try {
-    const foodTxt = await fsp.readFile('server/food/FishFood.txt', 'utf8');
-    const rawFood = parseBinaryMask(foodTxt, 64, 64);
+    // Generate food mask from PNG
+    const foodPng = path.join('server', 'food', 'FishFood.png');
+    const rawFood = await generateMaskFromPNG(foodPng, 64);
     foodMask = resampleNearest(rawFood, 64, 64, FOOD_SIZE, FOOD_SIZE);
+    console.log('✓ Generated food mask from PNG');
   } catch (e) {
-    console.error('Failed to load food mask from server/food/FishFood.txt', e);
+    console.error('✗ Failed to generate food mask from FishFood.png', e);
     foodMask = null;
   }
 }
@@ -1108,6 +1096,22 @@ io.on('connection', (socket) => {
         } catch (e) {
           console.warn('Failed to emit tails:init', e);
         }
+
+        // Send collision masks for client-side visualization (debug mode)
+        try {
+          const masks: Record<string, string> = {};
+          const types = (SHARK_EVOLUTIONS && SHARK_EVOLUTIONS.length) ? SHARK_EVOLUTIONS : ['Baby Shark.png'];
+          for (const type of types) {
+            const mask = sharkMasks.get(type);
+            if (mask) {
+              // Convert mask to base64 for transmission
+              masks[type] = Buffer.from(mask).toString('base64');
+            }
+          }
+          socket.emit('masks:init', { masks, size: SHARK_MASK_SIZE });
+        } catch (e) {
+          console.warn('Failed to emit masks:init', e);
+        }
     });
 
     // Update player position and rotation
@@ -1140,7 +1144,8 @@ io.on('connection', (socket) => {
 
             // Check if new position would collide with any other shark
             // If so, block the movement (sharks are solid objects)
-            if (sharkMask) {
+            // unguarded: rely on per-player masks (per-player masks checked inside sharkCollidesWithShark)
+            {
                 const tempPlayer = { ...me, x: nx, y: ny, angle };
                 let blocked = false;
                 let hitOther: Player | null = null;
@@ -1250,6 +1255,7 @@ io.on('connection', (socket) => {
                     nx = me.x;
                     ny = me.y;
                 }
+
             }
 
             me.x = nx;
@@ -1607,7 +1613,7 @@ loadSharkEvolutions()
   .catch(() => {});
 
 setInterval(() => {
-  if (!sharkMask || !foodMask) return;
+  if (!foodMask) return;
   const foodsArr = Object.values(gameState.foods);
   if (foodsArr.length === 0) return;
   for (const me of Object.values(gameState.players)) {

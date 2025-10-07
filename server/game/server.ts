@@ -2,6 +2,14 @@ import { Server } from 'socket.io';
 import { createServer } from 'http';
 import { promises as fsp } from 'fs';
 import * as path from 'path';
+import {
+  generateMaskFromPNG,
+  computeMouthAnchorFromMask,
+  computeTailAnchorFromMask,
+  loadAllSharkMasks,
+  computeAllAnchors
+} from '../utils/maskGenerator';
+import { visualizeMask } from '../utils/collisionDebug';
 
 interface Player {
     id: string;
@@ -64,19 +72,7 @@ const SHARK_COLLISION_COOLDOWN_MS = 1000; // 1 second cooldown between collision
 let MOUTH_OFFSET_X = 26 - (SHARK_MASK_SIZE / 2);  // fallback if mask not available
 let MOUTH_OFFSET_Y = 150 - (SHARK_MASK_SIZE / 2);
 
-function computeMouthAnchorFromMask(mask: Uint8Array, size: number): { x: number; y: number } {
-  // Find leftmost opaque edge across rows; pick median row among those near the global minX (within 2px)
-  let minX = size, rows: number[] = [];
-  const leftmost = new Array<number>(size).fill(size);
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      if (mask[y * size + x] !== 0) { leftmost[y] = x; if (x < minX) minX = x; break; }
-    }
-  }
-  for (let y = 0; y < size; y++) if (leftmost[y] <= minX + 2) rows.push(y);
-  const yMed = rows.length ? rows[Math.floor(rows.length / 2)] : Math.round(size / 2);
-  return { x: minX, y: yMed };
-}
+// computeMouthAnchorFromMask and computeTailAnchorFromMask are now imported from maskGenerator.ts
 
 // Active bubbles collection
 const bubbles: { [id: number]: Bubble } = {};
@@ -126,11 +122,20 @@ function parseBinaryMask(txt: string, w: number, h: number): Uint8Array {
 }
 
 // Visual scale per shark type: baby small → megalodon large
+// Linear scaling: Baby Shark (index 0) = 1.0x, Megalodon (index 19) = 2.0x
 function getSharkScaleForType(type: string): number {
   const idx = SHARK_EVOLUTIONS ? SHARK_EVOLUTIONS.indexOf(type) : -1;
   if (idx < 0) return 1.0;
-  // Smooth progression: 1.00 at index 0 → ~1.38 at index 19
-  return Math.min(1.4, 1.0 + 0.02 * idx);
+
+  // Total number of shark types (20 sharks: index 0-19)
+  const totalSharks = SHARK_EVOLUTIONS.length;
+  if (totalSharks <= 1) return 1.0;
+
+  // Linear interpolation: 1.0 + (idx / (totalSharks - 1)) * (2.0 - 1.0)
+  // Baby Shark (idx=0): 1.0 + (0/19) * 1.0 = 1.0
+  // Megalodon (idx=19): 1.0 + (19/19) * 1.0 = 2.0
+  const scale = 1.0 + (idx / (totalSharks - 1)) * 1.0;
+  return Math.min(2.0, Math.max(1.0, scale));
 }
 
 function resampleNearest(src: Uint8Array, srcW: number, srcH: number, dstW: number, dstH: number): Uint8Array {
@@ -221,34 +226,16 @@ function formatSharkName(sharkType: string): string {
   return sharkType.replace('.png', '');
 }
 
-// Compute tail anchor from mask (rightmost opaque edge, median row)
-function computeTailAnchorFromMask(mask: Uint8Array, size: number): { x: number; y: number } {
-  let maxX = -1, rows: number[] = [];
-  const rightmost = new Array<number>(size).fill(-1);
-  for (let y = 0; y < size; y++) {
-    for (let x = size - 1; x >= 0; x--) {
-      if (mask[y * size + x] !== 0) {
-        rightmost[y] = x;
-        if (x > maxX) maxX = x;
-        break;
-      }
-    }
-  }
-  for (let y = 0; y < size; y++) if (rightmost[y] >= maxX - 2) rows.push(y);
-  const yMed = rows.length ? rows[Math.floor(rows.length / 2)] : Math.round(size / 2);
-  return { x: maxX, y: yMed };
-}
 
-// Load a specific shark's mask and compute mouth/tail positions
+
+// Load a specific shark's mask from PNG and compute mouth/tail positions
 async function loadSharkMask(sharkFilename: string): Promise<void> {
   if (sharkMasks.has(sharkFilename)) return; // already loaded
 
   try {
-    // Mask files are lowercase, PNG files are capitalized
-    const baseName = sharkFilename.replace('.png', '.txt').toLowerCase();
-    const maskPath = path.join('server', 'sharks', baseName);
-    const txt = await fsp.readFile(maskPath, 'utf8');
-    const mask = parseBinaryMask(txt, SHARK_MASK_SIZE, SHARK_MASK_SIZE);
+    // Generate mask from PNG alpha channel
+    const pngPath = path.join('server', 'sharks', sharkFilename);
+    const mask = await generateMaskFromPNG(pngPath, SHARK_MASK_SIZE);
     sharkMasks.set(sharkFilename, mask);
 
     // Compute mouth and tail positions
@@ -276,9 +263,9 @@ async function loadSharkMask(sharkFilename: string): Promise<void> {
       sharkTailOffsets.set(sharkFilename, { x: -mouth.x, y: mouth.y });
     }
 
-    console.log(`Loaded mask for ${sharkFilename}`);
+    console.log(`✓ Generated mask from PNG for ${sharkFilename}`);
   } catch (e) {
-    console.error(`Failed to load mask for ${sharkFilename}`, e);
+    console.error(`✗ Failed to generate mask for ${sharkFilename}`, e);
     // Use baby shark as fallback
     if (sharkMask) {
       sharkMasks.set(sharkFilename, sharkMask);
@@ -297,8 +284,9 @@ function getPlayerMask(player: Player): Uint8Array | null {
 
 async function loadServerMasks(): Promise<void> {
   try {
-    const sharkTxt = await fsp.readFile('server/sharks/baby shark.txt', 'utf8');
-    const rawShark = parseBinaryMask(sharkTxt, SHARK_MASK_SIZE, SHARK_MASK_SIZE);
+    // Generate baby shark mask from PNG
+    const babySharkPng = path.join('server', 'sharks', 'Baby Shark.png');
+    const rawShark = await generateMaskFromPNG(babySharkPng, SHARK_MASK_SIZE);
     sharkMask = rawShark;
     try {
       const mouth = computeMouthAnchorFromMask(sharkMask, SHARK_MASK_SIZE);
@@ -306,17 +294,20 @@ async function loadServerMasks(): Promise<void> {
       MOUTH_OFFSET_X = mouth.x - (SHARK_MASK_SIZE / 2);
       MOUTH_OFFSET_Y = mouth.y - (SHARK_MASK_SIZE / 2);
     } catch {}
-
+    console.log('✓ Generated baby shark mask from PNG');
   } catch (e) {
-    console.error('Failed to load shark mask from server/sharks/baby shark.txt', e);
+    console.error('✗ Failed to generate shark mask from Baby Shark.png', e);
     sharkMask = null;
   }
+
   try {
-    const foodTxt = await fsp.readFile('server/food/FishFood.txt', 'utf8');
-    const rawFood = parseBinaryMask(foodTxt, 64, 64);
+    // Generate food mask from PNG
+    const foodPng = path.join('server', 'food', 'FishFood.png');
+    const rawFood = await generateMaskFromPNG(foodPng, 64);
     foodMask = resampleNearest(rawFood, 64, 64, FOOD_SIZE, FOOD_SIZE);
+    console.log('✓ Generated food mask from PNG');
   } catch (e) {
-    console.error('Failed to load food mask from server/food/FishFood.txt', e);
+    console.error('✗ Failed to generate food mask from FishFood.png', e);
     foodMask = null;
   }
 }
@@ -327,10 +318,11 @@ function pixelPerfectOverlap(me: Player, food: Food): boolean {
 
   // Coarse prune with per-shark scale
   const sf = getSharkScaleForType(me.sharkType);
-  const effR = SHARK_HALF * sf;
-  const cx = me.x + effR, cy = me.y + effR;
+  // Shark center in world space: position is top-left, center = pos + PLAYER_RADIUS * scale
+  const cx = me.x + PLAYER_RADIUS * sf;
+  const cy = me.y + PLAYER_RADIUS * sf;
   const dx = cx - food.x, dy = cy - food.y;
-  const maxR = effR + FOOD_RADIUS + 40;
+  const maxR = PLAYER_RADIUS * sf + FOOD_HALF + 20;
   if ((dx*dx + dy*dy) > (maxR*maxR)) return false;
 
   // Match client rendering: rotate(angle + PI) then scaleY(flipY)
@@ -352,7 +344,7 @@ function pixelPerfectOverlap(me: Player, food: Food): boolean {
       const wx = (food.x - FOOD_HALF) + fx + 0.5;
       const wy = (food.y - FOOD_HALF) + fy + 0.5;
 
-      // Translate to shark-local space
+      // Translate to shark-local space (relative to shark center)
       const vx = wx - cx;
       const vy = wy - cy;
 
@@ -364,20 +356,22 @@ function pixelPerfectOverlap(me: Player, food: Food): boolean {
       const lx = rx;
       const ly = ry * flipY;
 
-      // Convert to mask coordinates
+      // Convert to mask coordinates: local_pixels / (SHARK_SCALE * visual_scale) + mask_center
       const mx = (lx / scale) + (SHARK_MASK_SIZE / 2);
       const my = (ly / scale) + (SHARK_MASK_SIZE / 2);
+      const mxi = Math.floor(mx);
+      const myi = Math.floor(my);
 
-      // Check center pixel
-      const mxi = Math.round(mx);
-      const myi = Math.round(my);
+      // Check bounds and collision
       if (mxi >= 0 && myi >= 0 && mxi < SHARK_MASK_SIZE && myi < SHARK_MASK_SIZE) {
-        if (playerMask[myi * SHARK_MASK_SIZE + mxi] !== 0) return true;
+        if (playerMask[myi * SHARK_MASK_SIZE + mxi] !== 0) {
+          return true;
+        }
       }
 
-      // Check 5x5 neighborhood for sub-pixel accuracy (increased for larger sharks)
-      for (let dy = -2; dy <= 2; dy++) {
-        for (let dx = -2; dx <= 2; dx++) {
+      // Check 3x3 neighborhood for sub-pixel accuracy
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
           const tx = mxi + dx;
           const ty = myi + dy;
           if (tx >= 0 && ty >= 0 && tx < SHARK_MASK_SIZE && ty < SHARK_MASK_SIZE) {
@@ -535,7 +529,7 @@ function bubbleHitsShark(p: Player, bx: number, by: number): boolean {
   const ly = ry * flipY;
   // Map to mask pixel coordinates (scale to mask space with visual scale s)
   const scale = SHARK_SCALE * sf;
-  
+
   // Check a 5x5 grid of sample points around the bullet position for better accuracy
   // This ensures we catch bullets that hit any colored pixel of the shark
   const sampleRadius = 2.5; // pixels in world space
@@ -543,10 +537,10 @@ function bubbleHitsShark(p: Player, bx: number, by: number): boolean {
     for (let sx = -2; sx <= 2; sx++) {
       const sampleX = lx + (sx * sampleRadius);
       const sampleY = ly + (sy * sampleRadius);
-      
+
       const ux = Math.round((sampleX / scale) + (SHARK_MASK_SIZE / 2));
       const uy = Math.round((sampleY / scale) + (SHARK_MASK_SIZE / 2));
-      
+
       if (ux >= 0 && uy >= 0 && ux < SHARK_MASK_SIZE && uy < SHARK_MASK_SIZE) {
         if (playerMask[uy * SHARK_MASK_SIZE + ux] !== 0) return true;
       }
@@ -565,42 +559,40 @@ function sharkCollidesWithShark(shark1: Player, shark2: Player): boolean {
   const sf1 = getSharkScaleForType(shark1.sharkType);
   const sf2 = getSharkScaleForType(shark2.sharkType);
 
-  // Coarse prune: sum of radii at current scale with a small safety pad (helps big sharks)
-  const r1 = SHARK_HALF * sf1;
-  const r2 = SHARK_HALF * sf2;
-  const cx1 = shark1.x + r1, cy1 = shark1.y + r1;
-  const cx2 = shark2.x + r2, cy2 = shark2.y + r2;
+  // Coarse prune: sum of radii at current scale with padding
+  const r1 = PLAYER_RADIUS * sf1;
+  const r2 = PLAYER_RADIUS * sf2;
+  const cx1 = shark1.x + r1;
+  const cy1 = shark1.y + r1;
+  const cx2 = shark2.x + r2;
+  const cy2 = shark2.y + r2;
   const dx = cx2 - cx1, dy = cy2 - cy1;
-  const pad = Math.max(6, Math.round(6 * Math.max(sf1, sf2))); // more slack at high scales
+  const pad = 10;
   const maxR = r1 + r2 + pad;
   if ((dx * dx + dy * dy) > (maxR * maxR)) return false;
 
   // Setup transforms matching client: world = center + rotate(angle+PI) * (flipY * local)
   const a1 = shark1.angle;
-  let deg1 = (a1 * 180 / Math.PI) % 360; if (deg1 < 0) deg1 += 360;
+  let deg1 = (a1 * 180 / Math.PI) % 360;
+  if (deg1 < 0) deg1 += 360;
   const flipY1 = (deg1 > 270 || deg1 < 90) ? -1 : 1;
   const rot1 = a1 + Math.PI;
-  const cos1Inv = Math.cos(-rot1), sin1Inv = Math.sin(-rot1); // inverse for mapping world->mask1
+  const cos1Inv = Math.cos(-rot1), sin1Inv = Math.sin(-rot1);
   const scale1 = SHARK_SCALE * sf1;
 
   const a2 = shark2.angle;
-  let deg2 = (a2 * 180 / Math.PI) % 360; if (deg2 < 0) deg2 += 360;
+  let deg2 = (a2 * 180 / Math.PI) % 360;
+  if (deg2 < 0) deg2 += 360;
   const flipY2 = (deg2 > 270 || deg2 < 90) ? -1 : 1;
   const rot2 = a2 + Math.PI;
-  const cos2 = Math.cos(rot2), sin2 = Math.sin(rot2); // forward for mask2->world
+  const cos2 = Math.cos(rot2), sin2 = Math.sin(rot2);
   const scale2 = SHARK_SCALE * sf2;
 
-  // Choose sampling step so the step in world space ~1px (denser for reliable baby + large sharks)
-  const stepFor = (sf: number) => Math.max(1, Math.floor(1 / (SHARK_SCALE * sf)));
-  const step1 = stepFor(sf1);
-  const step2 = stepFor(sf2);
+  // Adaptive sampling: denser for larger sharks
+  const step1 = Math.max(2, Math.floor(4 / sf1));
+  const step2 = Math.max(2, Math.floor(4 / sf2));
 
-  // Neighborhood kernel increases for very large sharks to reduce misses on thin parts
-  const kernelFor = (sf: number) => (sf >= 1.28 ? 3 : sf >= 1.15 ? 2 : 1); // 3=>7x7, 2=>5x5, 1=>3x3
-  const k1 = kernelFor(sf1);
-  const k2 = kernelFor(sf2);
-
-  // Helper: sample src mask, project to dst mask, return true on first colored-over-colored hit
+  // Helper: sample src mask pixels, project to dst mask, return true on overlap
   const samplesHit = (
     srcMask: Uint8Array,
     srcCenterX: number, srcCenterY: number,
@@ -608,22 +600,22 @@ function sharkCollidesWithShark(shark1: Player, shark2: Player): boolean {
     dstMask: Uint8Array,
     dstCenterX: number, dstCenterY: number,
     dstCosInv: number, dstSinInv: number, dstFlipY: number, dstScale: number,
-    step: number, kernel: number
+    step: number
   ): boolean => {
     for (let my = 0; my < SHARK_MASK_SIZE; my += step) {
       for (let mx = 0; mx < SHARK_MASK_SIZE; mx += step) {
-        if (srcMask[my * SHARK_MASK_SIZE + mx] === 0) continue; // only colored pixels
+        if (srcMask[my * SHARK_MASK_SIZE + mx] === 0) continue;
 
-        // Local (mask) -> local (world) in px
+        // Mask coords -> local space (pixels relative to center)
         const lx = (mx - SHARK_MASK_SIZE / 2) * srcScale;
         const ly = (my - SHARK_MASK_SIZE / 2) * srcScale;
 
-        // Apply flip in local space, then rotation to world
+        // Apply flip, then rotation to world space
         const lyF = ly * srcFlipY;
         const wx = srcCenterX + (lx * srcCos - lyF * srcSin);
         const wy = srcCenterY + (lx * srcSin + lyF * srcCos);
 
-        // World -> dst local (inverse rotation then inverse flip)
+        // World -> dst local (inverse rotation, then inverse flip)
         const vx = wx - dstCenterX;
         const vy = wy - dstCenterY;
         const rx = dstCosInv * vx - dstSinInv * vy;
@@ -631,33 +623,24 @@ function sharkCollidesWithShark(shark1: Player, shark2: Player): boolean {
         const lxD = rx;
         const lyD = ry * dstFlipY;
 
-        // dst mask coordinates
+        // Local -> dst mask coordinates
         const mxD = (lxD / dstScale) + (SHARK_MASK_SIZE / 2);
         const myD = (lyD / dstScale) + (SHARK_MASK_SIZE / 2);
-        const xi = Math.round(mxD);
-        const yi = Math.round(myD);
+        const xi = Math.floor(mxD);
+        const yi = Math.floor(myD);
+
+        // Check center pixel
         if (xi >= 0 && yi >= 0 && xi < SHARK_MASK_SIZE && yi < SHARK_MASK_SIZE) {
           if (dstMask[yi * SHARK_MASK_SIZE + xi] !== 0) return true;
-          // Check neighborhood (adaptive kernel)
-          for (let oy = -kernel; oy <= kernel; oy++) {
-            for (let ox = -kernel; ox <= kernel; ox++) {
-              const tx = xi + ox, ty = yi + oy;
-              if (tx < 0 || ty < 0 || tx >= SHARK_MASK_SIZE || ty >= SHARK_MASK_SIZE) continue;
+        }
+
+        // Check 3x3 neighborhood for sub-pixel accuracy
+        for (let oy = -1; oy <= 1; oy++) {
+          for (let ox = -1; ox <= 1; ox++) {
+            const tx = xi + ox, ty = yi + oy;
+            if (tx >= 0 && ty >= 0 && tx < SHARK_MASK_SIZE && ty < SHARK_MASK_SIZE) {
               if (dstMask[ty * SHARK_MASK_SIZE + tx] !== 0) return true;
             }
-          }
-          // Additional sub-pixel sampling to catch fractional mapping at large scales
-          const fracOffsets = [
-            { dx: -0.45, dy: -0.45 }, { dx: 0.45, dy: -0.45 },
-            { dx: -0.45, dy: 0.45 },  { dx: 0.45, dy: 0.45 },
-            { dx: 0.0,  dy: -0.5 },   { dx: 0.0,  dy: 0.5 },
-            { dx: -0.5, dy: 0.0 },    { dx: 0.5,  dy: 0.0 }
-          ];
-          for (const off of fracOffsets) {
-            const sx = Math.round(mxD + off.dx);
-            const sy = Math.round(myD + off.dy);
-            if (sx < 0 || sy < 0 || sx >= SHARK_MASK_SIZE || sy >= SHARK_MASK_SIZE) continue;
-            if (dstMask[sy * SHARK_MASK_SIZE + sx] !== 0) return true;
           }
         }
       }
@@ -665,17 +648,17 @@ function sharkCollidesWithShark(shark1: Player, shark2: Player): boolean {
     return false;
   };
 
-  // Check both directions to avoid misses on thin geometry
-  if (samplesHit(mask2, cx2, cy2, cos2, sin2, flipY2, scale2,
-                 mask1, cx1, cy1, cos1Inv, sin1Inv, flipY1, scale1,
-                 step2, k1)) return true;
-
-  // Also sample mask1 against mask2 (swap roles)
+  // Check both directions to catch all collisions
   const cos1 = Math.cos(rot1), sin1 = Math.sin(rot1);
   const cos2Inv = Math.cos(-rot2), sin2Inv = Math.sin(-rot2);
+  
   if (samplesHit(mask1, cx1, cy1, cos1, sin1, flipY1, scale1,
                  mask2, cx2, cy2, cos2Inv, sin2Inv, flipY2, scale2,
-                 step1, k2)) return true;
+                 step1)) return true;
+
+  if (samplesHit(mask2, cx2, cy2, cos2, sin2, flipY2, scale2,
+                 mask1, cx1, cy1, cos1Inv, sin1Inv, flipY1, scale1,
+                 step2)) return true;
 
   return false;
 }
@@ -908,6 +891,19 @@ io.on('connection', (socket) => {
           console.warn('Failed to emit tails:init', e);
         }
 
+        // Send collision masks for client-side visualization (debug mode)
+        try {
+          const masks: Record<string, string> = {};
+          for (const [type, mask] of sharkMasks.entries()) {
+            // Convert mask to base64 for transmission
+            masks[type] = Buffer.from(mask).toString('base64');
+          }
+          socket.emit('masks:init', { masks, size: SHARK_MASK_SIZE });
+          console.log(`Sent ${Object.keys(masks).length} collision masks to client ${socket.id}`);
+        } catch (e) {
+          console.warn('Failed to emit masks:init', e);
+        }
+
     });
 
     // Update player position and rotation
@@ -940,7 +936,8 @@ io.on('connection', (socket) => {
 
             // Check if new position would collide with any other shark
             // If so, block the movement (sharks are solid objects)
-            if (sharkMask) {
+            // unguarded: rely on per-player masks (per-player masks checked inside sharkCollidesWithShark)
+            {
                 const tempPlayer = { ...me, x: nx, y: ny, angle };
                 let blocked = false;
                 let hitOther: Player | null = null;
@@ -1064,6 +1061,7 @@ io.on('connection', (socket) => {
                     // Blocked but no hitOther (shouldn't happen, but handle gracefully)
                     nx = me.x; ny = me.y;
                 }
+
             }
 
             me.x = nx;
@@ -1430,7 +1428,7 @@ loadSharkEvolutions()
   .catch(() => {});
 
 setInterval(() => {
-  if (!sharkMask || !foodMask) return;
+  if (!foodMask) return;
   const foodsArr = Object.values(gameState.foods);
   if (foodsArr.length === 0) return;
   for (const me of Object.values(gameState.players)) {
