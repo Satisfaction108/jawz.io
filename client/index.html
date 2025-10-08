@@ -141,17 +141,43 @@
           <canvas id="minimap" width="200" height="200"></canvas>
         </div>
         <div class="stats-container">
+          <!-- Level bar (left column) -->
           <div class="levelbar" role="status" aria-live="polite">
             <div class="levelbar__label">Level</div>
             <div class="levelbar__track"><div id="level-fill" class="levelbar__fill" style="width:0%"></div></div>
             <div class="levelbar__value"><span id="level-text">1</span></div>
           </div>
 
+          <!-- Center column: Shark name and abilities -->
+          <div class="center-column">
             <div id="shark-chip" class="shark-chip" role="status" aria-live="polite">
               <div class="shark-chip__label">Shark:</div>
               <div class="shark-chip__value"><span id="shark-name">Baby Shark</span></div>
             </div>
 
+            <div id="abilities-container" class="abilities-container">
+              <div id="ability-speed-boost" class="ability-icon" data-ability-id="quickDash">
+                <img src="/abilities/Speed Boost.png" alt="Speed Boost" class="ability-icon__img">
+                <div class="ability-icon__cooldown"></div>
+                <div class="ability-icon__tooltip">
+                  <div class="ability-icon__tooltip-name">Speed Boost</div>
+                  <div class="ability-icon__tooltip-desc">Loading...</div>
+                  <div class="ability-icon__tooltip-key">Press K</div>
+                </div>
+              </div>
+              <div id="ability-bubble-shield" class="ability-icon" data-ability-id="bubbleShield">
+                <img src="/abilities/Bubble Shield.png" alt="Bubble Shield" class="ability-icon__img">
+                <div class="ability-icon__cooldown"></div>
+                <div class="ability-icon__tooltip">
+                  <div class="ability-icon__tooltip-name">Bubble Shield</div>
+                  <div class="ability-icon__tooltip-desc">Loading...</div>
+                  <div class="ability-icon__tooltip-key">Press L</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Score bar (right column) -->
           <div class="scorebar" role="status" aria-live="polite">
             <div class="scorebar__label">Score</div>
             <div class="scorebar__track"><div id="score-fill" class="scorebar__fill" style="width:0%"></div></div>

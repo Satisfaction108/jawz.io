@@ -22,6 +22,10 @@ interface Player {
     dead: boolean;   // death state
     level: number;   // current level (1-100+)
     sharkType: string; // current shark sprite filename (e.g., "baby shark.png")
+    abilities?: {
+      quickDash?: { cooldownUntil: number; activeUntil: number };
+      bubbleShield?: { cooldownUntil: number; activeUntil: number };
+    };
 }
 
 interface Food { id: number; x: number; y: number; vx?: number; vy?: number; }
@@ -66,6 +70,32 @@ const BUBBLE_TTL_MS = 1000;      // lifespan 1.0 seconds (auto fade after remova
 const SHOOT_COOLDOWN_MS = 500;   // 0.5 seconds per player (reload)
 const SHARK_COLLISION_DAMAGE = 10; // damage dealt when sharks collide
 const SHARK_COLLISION_COOLDOWN_MS = 1000; // 1 second cooldown between collision damage
+
+// Abilities configuration
+interface AbilityConfig {
+  id: 'quickDash' | 'bubbleShield';
+  name: string;
+  description: string;
+  durationSeconds: number;
+  cooldownSeconds: number;
+  activationKey: string;
+}
+interface AbilitiesData {
+  abilities: {
+    quickDash: AbilityConfig;
+    bubbleShield: AbilityConfig;
+  };
+}
+let abilitiesConfig: AbilitiesData | null = null;
+async function loadAbilitiesConfig(): Promise<void> {
+  try {
+    const data = await fsp.readFile(path.join('server', 'abilities', 'abilities.json'), 'utf8');
+    abilitiesConfig = JSON.parse(data);
+    console.log('✓ Abilities configuration loaded');
+  } catch (err) {
+    console.error('Failed to load abilities config:', err);
+  }
+}
 
 // Mouth offset relative to shark center (rotate by angle + 180deg)
 // Note: These are in mask space (256x256), will be scaled to render space when used
@@ -119,6 +149,9 @@ function parseBinaryMask(txt: string, w: number, h: number): Uint8Array {
   const n = Math.min(flat.length, w * h);
   for (let i = 0; i < n; i++) arr[i] = flat.charCodeAt(i) === 49 ? 1 : 0;
   return arr;
+
+// Ability activation handler and events will be defined per-connection below.
+
 }
 
 // Visual scale per shark type: baby small → megalodon large
@@ -651,7 +684,7 @@ function sharkCollidesWithShark(shark1: Player, shark2: Player): boolean {
   // Check both directions to catch all collisions
   const cos1 = Math.cos(rot1), sin1 = Math.sin(rot1);
   const cos2Inv = Math.cos(-rot2), sin2Inv = Math.sin(-rot2);
-  
+
   if (samplesHit(mask1, cx1, cy1, cos1, sin1, flipY1, scale1,
                  mask2, cx2, cy2, cos2Inv, sin2Inv, flipY2, scale2,
                  step1)) return true;
@@ -851,6 +884,10 @@ io.on('connection', (socket) => {
             dead: false,
             level: 1,
             sharkType: 'Baby Shark.png',
+            abilities: {
+              quickDash: { activeUntil: 0, cooldownUntil: 0 },
+              bubbleShield: { activeUntil: 0, cooldownUntil: 0 },
+            },
         };
 
         console.log(`Player ${sanitizedUsername} spawned at (${gameState.players[socket.id].x}, ${gameState.players[socket.id].y})`);
@@ -926,7 +963,9 @@ io.on('connection', (socket) => {
 
 
             const dist = Math.hypot(dx, dy);
-            const maxDist = SELF_SPEED * dt * SPEED_TOL;
+            const isDashing = me.abilities?.quickDash && now < (me.abilities.quickDash.activeUntil || 0);
+            const speedMultiplier = isDashing ? 3.5 : 1;
+            const maxDist = SELF_SPEED * dt * SPEED_TOL * speedMultiplier;
             let nx = clampedX, ny = clampedY;
             if (dist > maxDist) {
                 const k = maxDist / (dist || 1);
@@ -1143,7 +1182,63 @@ io.on('connection', (socket) => {
             console.log(`Dev levelup: ${me.username} is now level ${newLevel} (${me.sharkType})`);
         });
 
+    // Ability activation (server-authoritative cooldowns/state)
+    socket.on('ability:activate', (data: { abilityId: 'quickDash' | 'bubbleShield' }) => {
+        console.log(`[SERVER] Received ability:activate from ${socket.id}:`, data);
 
+        const me = gameState.players[socket.id];
+        if (!me || me.dead) {
+            console.log(`[SERVER] Player not found or dead: ${socket.id}`);
+            return;
+        }
+
+        if (!abilitiesConfig) {
+            console.log(`[SERVER] Abilities config not loaded`);
+            return;
+        }
+
+        const { abilityId } = data;
+        const now = Date.now();
+
+        if (!me.abilities || !me.abilities[abilityId]) {
+            console.log(`[SERVER] Player ${me.username} has no abilities state for ${abilityId}`);
+            return;
+        }
+
+        const abilityState = me.abilities[abilityId]!;
+        const config = abilitiesConfig.abilities[abilityId];
+
+        console.log(`[SERVER] ${me.username} ${abilityId} state: activeUntil=${abilityState.activeUntil}, cooldownUntil=${abilityState.cooldownUntil}, now=${now}`);
+
+        // Cooldown check
+        if (now < abilityState.cooldownUntil) {
+            console.log(`[SERVER] ${me.username} tried to use ${abilityId} but it's on cooldown (${abilityState.cooldownUntil - now}ms remaining)`);
+            return;
+        }
+        // Already active check
+        if (now < abilityState.activeUntil) {
+            console.log(`[SERVER] ${me.username} tried to use ${abilityId} but it's already active (${abilityState.activeUntil - now}ms remaining)`);
+            return;
+        }
+
+        // Activate
+        const durationMs = (config?.durationSeconds ?? 0.5) * 1000;
+        const cooldownMs = (config?.cooldownSeconds ?? 5) * 1000;
+        abilityState.activeUntil = now + durationMs;
+        abilityState.cooldownUntil = now + durationMs + cooldownMs;
+
+        console.log(`[SERVER] ${me.username} activated ${abilityId} (activeUntil=${abilityState.activeUntil}, cooldownUntil=${abilityState.cooldownUntil})`);
+
+        // Broadcast
+        const payload = {
+            playerId: socket.id,
+            abilityId,
+            activeUntil: abilityState.activeUntil,
+            cooldownUntil: abilityState.cooldownUntil
+        };
+        console.log(`[SERVER] Broadcasting ability:activated:`, payload);
+        io.emit('ability:activated', payload);
+    });
 
     // Client requests to shoot toward a world-space target (server-authoritative)
     socket.on('player:shoot', ({ tx, ty }: { tx: number; ty: number }) => {
@@ -1241,6 +1336,10 @@ io.on('connection', (socket) => {
             dead: false,
             level: 1,
             sharkType: 'Baby Shark.png',
+            abilities: {
+              quickDash: { activeUntil: 0, cooldownUntil: 0 },
+              bubbleShield: { activeUntil: 0, cooldownUntil: 0 },
+            },
         } as Player;
         lastUpdate.set(socket.id, Date.now());
         lastPos.set(socket.id, { x: me.x, y: me.y });
@@ -1304,6 +1403,33 @@ setInterval(() => {
             for (const p of Object.values(gameState.players)) {
                 if (!p || p.id === b.ownerId || p.dead) continue;
                 if (bubbleHitsShark(p, checkX, checkY)) {
+                    // Check bubble shield first
+                    const shield = p.abilities?.bubbleShield;
+                    const hasShield = shield && now < (shield.activeUntil || 0);
+                    if (hasShield && p.abilities?.bubbleShield) {
+                        // Consume shield and block damage
+                        p.abilities.bubbleShield.activeUntil = 0;
+
+                        // Emit shield pop effect at the player's position
+                        const sf = getSharkScaleForType(p.sharkType);
+                        io.emit('effect:shield-pop', {
+                            playerId: p.id,
+                            x: p.x + PLAYER_RADIUS * sf,
+                            y: p.y + PLAYER_RADIUS * sf,
+                            scale: sf
+                        });
+
+                        // Deactivate shield
+                        io.emit('ability:deactivated', { playerId: p.id, abilityId: 'bubbleShield', reason: 'hit' });
+
+                        // Delete bullet immediately (it pops on contact)
+                        delete bubbles[id];
+                        projDirty = true;
+                        dirty = true; // player state changed (shield removed)
+                        hit = true;
+                        break; // Exit player loop immediately - bullet is destroyed
+                    }
+
                     // Deal damage
                     recordDamage(p.id, b.ownerId, BULLET_DAMAGE, now);
                     p.hp = Math.max(0, (p.hp ?? 100) - BULLET_DAMAGE);
@@ -1318,6 +1444,7 @@ setInterval(() => {
                     // Handle death
                     if (p.hp <= 0) {
                         const dyingId = p.id;
+
                         const s = io.sockets.sockets.get(dyingId);
                         s?.emit('player:died');
 
@@ -1377,6 +1504,14 @@ setInterval(() => {
         if (playersEmitAccum >= PLAYERS_EMIT_MS) {
           dirty = false;
           playersEmitAccum = 0;
+
+          // Debug: log abilities state for players with active abilities
+          for (const p of Object.values(gameState.players)) {
+            if (p.abilities?.bubbleShield && p.abilities.bubbleShield.activeUntil > Date.now()) {
+              console.log(`[SERVER] Broadcasting player ${p.username} with shield activeUntil=${p.abilities.bubbleShield.activeUntil}`);
+            }
+          }
+
           io.compress(false).emit('players:update', { ts: Date.now(), players: gameState.players });
           // Server-side leaderboard (top 10 by score) — reliable emit (non-volatile)
           const lb = Object.values(gameState.players)
@@ -1426,6 +1561,7 @@ loadLevelProgression().catch(() => {});
 loadSharkEvolutions()
   .then(() => preloadAllSharkMasks())
   .catch(() => {});
+loadAbilitiesConfig().catch(() => {});
 
 setInterval(() => {
   if (!foodMask) return;

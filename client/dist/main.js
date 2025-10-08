@@ -26,6 +26,103 @@ let scoreText;
 let levelFill;
 let levelText;
 let sharkNameEl;
+let abilitiesData = null;
+const abilityStates = new Map();
+// Load abilities configuration
+async function loadAbilitiesConfig() {
+    try {
+        const response = await fetch('/abilities/abilities.json');
+        abilitiesData = await response.json();
+        console.log('✓ Abilities configuration loaded');
+        // Initialize ability states
+        abilityStates.set('quickDash', { cooldownUntil: 0, activeUntil: 0 });
+        abilityStates.set('bubbleShield', { cooldownUntil: 0, activeUntil: 0 });
+        // Update tooltips with loaded data
+        updateAbilityTooltips();
+    }
+    catch (err) {
+        console.error('Failed to load abilities config:', err);
+    }
+}
+function updateAbilityTooltips() {
+    if (!abilitiesData)
+        return;
+    const speedBoostEl = document.getElementById('ability-speed-boost');
+    const bubbleShieldEl = document.getElementById('ability-bubble-shield');
+    if (speedBoostEl) {
+        const desc = speedBoostEl.querySelector('.ability-icon__tooltip-desc');
+        if (desc)
+            desc.textContent = abilitiesData.abilities.quickDash.description;
+    }
+    if (bubbleShieldEl) {
+        const desc = bubbleShieldEl.querySelector('.ability-icon__tooltip-desc');
+        if (desc)
+            desc.textContent = abilitiesData.abilities.bubbleShield.description;
+    }
+}
+function updateAbilityUI() {
+    const now = Date.now();
+    // Update each ability icon
+    for (const [abilityId, state] of abilityStates.entries()) {
+        const iconEl = document.querySelector(`[data-ability-id="${abilityId}"]`);
+        if (!iconEl)
+            continue;
+        const cooldownEl = iconEl.querySelector('.ability-icon__cooldown');
+        if (!cooldownEl)
+            continue;
+        // Check if active
+        const isActive = now < state.activeUntil;
+        if (isActive) {
+            iconEl.classList.add('active');
+        }
+        else {
+            iconEl.classList.remove('active');
+        }
+        // Check if on cooldown
+        const isOnCooldown = now < state.cooldownUntil;
+        if (isOnCooldown) {
+            iconEl.classList.add('on-cooldown');
+            // Calculate cooldown progress (0-100%)
+            const totalCooldown = state.cooldownUntil - (state.activeUntil || state.cooldownUntil - 5000);
+            const remaining = state.cooldownUntil - now;
+            const progress = Math.max(0, Math.min(100, (remaining / totalCooldown) * 100));
+            cooldownEl.style.height = `${progress}%`;
+        }
+        else {
+            iconEl.classList.remove('on-cooldown');
+            cooldownEl.style.height = '0%';
+        }
+    }
+}
+function activateAbility(abilityId) {
+    console.log(`[CLIENT] activateAbility called for ${abilityId}`);
+    console.log(`[CLIENT] socket connected: ${socket?.connected}, selfId: ${selfId}`);
+    if (!socket || !selfId) {
+        console.warn(`[CLIENT] Cannot activate: socket=${!!socket}, selfId=${selfId}`);
+        return;
+    }
+    const state = abilityStates.get(abilityId);
+    if (!state) {
+        console.warn(`[CLIENT] No state found for ${abilityId}`);
+        return;
+    }
+    const now = Date.now();
+    console.log(`[CLIENT] ${abilityId} state: activeUntil=${state.activeUntil}, cooldownUntil=${state.cooldownUntil}, now=${now}`);
+    // Check if on cooldown
+    if (now < state.cooldownUntil) {
+        console.log(`[CLIENT] Ability ${abilityId} is on cooldown (${state.cooldownUntil - now}ms remaining)`);
+        return;
+    }
+    // Check if already active
+    if (now < state.activeUntil) {
+        console.log(`[CLIENT] Ability ${abilityId} is already active (${state.activeUntil - now}ms remaining)`);
+        return;
+    }
+    // Emit activation to server
+    console.log(`[CLIENT] Emitting ability:activate for ${abilityId}`);
+    socket.emit('ability:activate', { abilityId });
+    console.log(`[CLIENT] Activated ability: ${abilityId}`);
+}
 let projectileLayer;
 let projectiles = {};
 let deathOverlay;
@@ -163,6 +260,40 @@ function spawnTrailBubbleAt(x, y, angle, sharkType) {
         el.style.setProperty('--y', `${Math.round(by - 5)}px`);
         world.appendChild(el);
         setTimeout(() => { el.remove(); activeTrailBubbles--; }, 900);
+    }
+}
+// Spawn shield pop effect (cyan bubble burst)
+function spawnShieldPopEffect(x, y, s = 1) {
+    const centerX = x;
+    const centerY = y;
+    // Central burst: expanding cyan ring
+    const burst = document.createElement('div');
+    burst.className = 'shield-pop-burst';
+    const burstSize = Math.round(SHARK_SIZE * 1.2 * s);
+    burst.style.width = `${burstSize}px`;
+    burst.style.height = `${burstSize}px`;
+    burst.style.left = `${centerX - burstSize / 2}px`;
+    burst.style.top = `${centerY - burstSize / 2}px`;
+    world.appendChild(burst);
+    setTimeout(() => burst.remove(), 400);
+    // Radial cyan particles
+    const numParticles = 12;
+    for (let i = 0; i < numParticles; i++) {
+        const particle = document.createElement('div');
+        particle.className = 'shield-pop-particle';
+        const angle = (Math.PI * 2 * i) / numParticles + (Math.random() - 0.5) * 0.3;
+        const speed = 30 + Math.random() * 25;
+        const offsetX = Math.cos(angle) * speed;
+        const offsetY = Math.sin(angle) * speed;
+        const size = (12 + Math.random() * 12) * (0.85 + 0.15 * s);
+        particle.style.width = `${size}px`;
+        particle.style.height = `${size}px`;
+        particle.style.left = `${centerX - size / 2}px`;
+        particle.style.top = `${centerY - size / 2}px`;
+        particle.style.setProperty('--tx', `${offsetX}px`);
+        particle.style.setProperty('--ty', `${offsetY}px`);
+        world.appendChild(particle);
+        setTimeout(() => particle.remove(), 500);
     }
 }
 // Spawn evolution smoke particle explosion (Brawl Stars style)
@@ -1121,6 +1252,21 @@ function render() {
                 hpEl.style.background = 'linear-gradient(90deg, #2aff88, #14d06a)';
             }
         }
+        // Bubble Shield visual effect (server-authoritative for all players)
+        const hasShield = p.abilities?.bubbleShield && Date.now() < (p.abilities.bubbleShield.activeUntil || 0);
+        let shieldEl = el.querySelector('.shark__shield');
+        if (hasShield && !shieldEl) {
+            // Create shield element
+            shieldEl = document.createElement('div');
+            shieldEl.className = 'shark__shield';
+            // Insert before the image so it appears behind the shark
+            el.insertBefore(shieldEl, el.querySelector('.shark__img'));
+        }
+        else if (!hasShield && shieldEl) {
+            // Remove shield element with fade out
+            shieldEl.style.opacity = '0';
+            setTimeout(() => shieldEl?.remove(), 200);
+        }
         // --- FX: damage detection, trail emission, critical overlay ---
         const curHp = Math.max(0, Math.min(100, p.hp ?? 100));
         const prevHp = lastHpById.get(p.id) ?? curHp;
@@ -1139,8 +1285,11 @@ function render() {
         const nowMs2 = performance.now();
         const lastT = lastTrailTimeById.get(p.id) || 0;
         const prevPos = lastPosById.get(p.id);
-        // Increased throttle from 160ms to 250ms for better performance
-        if (nowMs2 - lastT > 250 && prevPos && (Math.abs(prevPos.x - p.x) + Math.abs(prevPos.y - p.y) > 2)) {
+        // Check if player has active speed boost
+        const isDashing = p.id === selfId && abilityStates.get('quickDash') && Date.now() < abilityStates.get('quickDash').activeUntil;
+        const trailInterval = isDashing ? 80 : 250; // Faster trail during dash
+        // Increased throttle from 160ms to 250ms for better performance (80ms during dash)
+        if (nowMs2 - lastT > trailInterval && prevPos && (Math.abs(prevPos.x - p.x) + Math.abs(prevPos.y - p.y) > 2)) {
             spawnTrailBubbleAt(p.x, p.y, p.angle, p.sharkType);
             lastTrailTimeById.set(p.id, nowMs2);
         }
@@ -1225,6 +1374,8 @@ function render() {
             }
         }
     }
+    // Update ability UI
+    updateAbilityUI();
     // Minimap - optimized to update less frequently (150ms instead of 100ms)
     if (ctx) {
         const t = performance.now();
@@ -1265,8 +1416,11 @@ function step(dt) {
         const invLen = 1 / Math.hypot(mx, my);
         mx *= invLen;
         my *= invLen;
-        vx = mx * SELF_SPEED;
-        vy = my * SELF_SPEED;
+        // Apply speed boost if active
+        const dashState = abilityStates.get('quickDash');
+        const speedMultiplier = dashState && Date.now() < dashState.activeUntil ? 3.5 : 1;
+        vx = mx * SELF_SPEED * speedMultiplier;
+        vy = my * SELF_SPEED * speedMultiplier;
     }
     // Integrate position with smooth acceleration
     const ax = 12; // accel
@@ -1349,6 +1503,15 @@ function bindGameInteractions(container) {
         }
         else if (k === 'd' || key === 'ArrowRight') {
             keys.d = down;
+            handled = true;
+        }
+        // Ability activation keys
+        else if (k === 'k' && down) {
+            activateAbility('quickDash');
+            handled = true;
+        }
+        else if (k === 'l' && down) {
+            activateAbility('bubbleShield');
             handled = true;
         }
         // Developer testing: z key for WarriorX12 only
@@ -1437,6 +1600,7 @@ function bindGameInteractions(container) {
 }
 function initSocket(username) {
     myUsername = username; // Store for respawn
+    // Dynamic socket URL: use localhost in dev, production URL in production
     // Dynamic socket URL: use localhost in dev, production URL in production
     const isDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
     const SOCKET_URL = isDev ? 'http://localhost:3002' : window.location.origin;
@@ -1542,8 +1706,12 @@ function initSocket(username) {
             ? data
             : { players: data };
         for (const [id, sp] of Object.entries(payload.players)) {
+            // Debug: log abilities for players with active shields
+            if (sp.abilities?.bubbleShield?.activeUntil > Date.now()) {
+                console.log(`[CLIENT] Received player ${id} with shield activeUntil=${sp.abilities.bubbleShield.activeUntil}`);
+            }
             if (id === selfId) {
-                // Keep client prediction for position/angle; still accept authoritative score and HP/death
+                // Keep client prediction for position/angle; still accept authoritative score and HP/death AND abilities
                 const me = players[id] || (players[id] = { ...sp });
                 if (sp.score !== undefined)
                     me.score = sp.score;
@@ -1551,6 +1719,8 @@ function initSocket(username) {
                     me.hp = sp.hp;
                 if (sp.dead !== undefined)
                     me.dead = sp.dead;
+                if (sp.abilities !== undefined)
+                    me.abilities = sp.abilities;
                 continue;
             }
             const existing = players[id];
@@ -1568,6 +1738,8 @@ function initSocket(username) {
                     existing.hp = sp.hp;
                 if (sp.dead !== undefined)
                     existing.dead = sp.dead;
+                if (sp.abilities !== undefined)
+                    existing.abilities = sp.abilities;
             }
         }
     });
@@ -1709,6 +1881,33 @@ function startGame(username) {
             console.error('❌ Failed to load collision masks:', e);
         }
     });
+    // Ability activation/deactivation events
+    socket.on('ability:activated', (data) => {
+        console.log(`[CLIENT] Received ability:activated:`, data);
+        const { playerId, abilityId, activeUntil, cooldownUntil } = data;
+        // Update local state if it's our player
+        if (playerId === selfId) {
+            const state = abilityStates.get(abilityId);
+            console.log(`[CLIENT] Updating state for ${abilityId}: activeUntil=${activeUntil}, cooldownUntil=${cooldownUntil}`);
+            if (state) {
+                state.activeUntil = activeUntil;
+                state.cooldownUntil = cooldownUntil;
+            }
+            console.log(`[CLIENT] Ability ${abilityId} activated (active until ${activeUntil}, cooldown until ${cooldownUntil})`);
+        }
+    });
+    socket.on('ability:deactivated', (data) => {
+        console.log(`[CLIENT] Received ability:deactivated:`, data);
+        const { playerId, abilityId, reason } = data;
+        // Update local state if it's our player
+        if (playerId === selfId) {
+            const state = abilityStates.get(abilityId);
+            if (state) {
+                state.activeUntil = 0;
+            }
+            console.log(`[CLIENT] Ability ${abilityId} deactivated (reason: ${reason || 'expired'})`);
+        }
+    });
     socket.on('server:pong', (t0) => {
         const rtt = Math.max(0, performance.now() - t0);
         msEMA = msEMA ? (msEMA * 0.7 + rtt * 0.3) : rtt;
@@ -1800,6 +1999,16 @@ function startGame(username) {
         }
         catch (e) {
             console.error('Collision effect error:', e);
+        }
+    });
+    // Shield pop effect (server-authoritative)
+    socket.on('effect:shield-pop', (data) => {
+        try {
+            // Create a visual "pop" effect at the shield location
+            spawnShieldPopEffect(data.x, data.y, data.scale);
+        }
+        catch (e) {
+            console.error('Shield pop effect error:', e);
         }
     });
     if (pingTimer)
@@ -1914,6 +2123,17 @@ function main() {
         world.style.willChange = 'transform';
     }
     bindGameInteractions(document.body);
+    // Ability icon click handlers
+    const speedBoostIcon = document.getElementById('ability-speed-boost');
+    const bubbleShieldIcon = document.getElementById('ability-bubble-shield');
+    if (speedBoostIcon) {
+        speedBoostIcon.addEventListener('click', () => activateAbility('quickDash'));
+    }
+    if (bubbleShieldIcon) {
+        bubbleShieldIcon.addEventListener('click', () => activateAbility('bubbleShield'));
+    }
+    // Load abilities configuration
+    loadAbilitiesConfig();
     // Header / account
     btnLogin = document.getElementById('btn-login');
     btnSignup = document.getElementById('btn-signup');

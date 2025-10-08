@@ -160,6 +160,85 @@
   filter: drop-shadow(0 0 9px rgba(0,210,255,.45)) drop-shadow(0 0 19px rgba(0,140,230,.25));
   opacity: .9;
 }
+
+/* Bubble Shield visual effect */
+.shark__shield {
+  position: absolute;
+  inset: -20%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0,255,255,0.15) 0%, rgba(0,200,255,0.08) 50%, transparent 70%);
+  border: 3px solid rgba(0,255,255,0.6);
+  box-shadow:
+    0 0 20px rgba(0,255,255,0.6),
+    0 0 40px rgba(0,255,255,0.3),
+    inset 0 0 30px rgba(0,255,255,0.2);
+  pointer-events: none;
+  z-index: 2;
+  animation: shield-pulse 1.5s ease-in-out infinite;
+}
+
+/* Shield pop effect - expanding cyan ring burst */
+.shield-pop-burst {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0,255,255,0.4) 0%, rgba(0,200,255,0.2) 40%, transparent 70%);
+  border: 3px solid rgba(0,255,255,0.8);
+  box-shadow:
+    0 0 30px rgba(0,255,255,0.8),
+    0 0 50px rgba(0,255,255,0.5),
+    inset 0 0 20px rgba(0,255,255,0.4);
+  animation: shieldPopBurst 0.4s ease-out forwards;
+  z-index: 100;
+}
+
+@keyframes shieldPopBurst {
+  0% {
+    transform: scale(0.8);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+/* Shield pop particles - radial cyan particles */
+.shield-pop-particle {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0,255,255,0.9) 0%, rgba(0,200,255,0.6) 50%, transparent 100%);
+  box-shadow:
+    0 0 12px rgba(0,255,255,0.8),
+    0 0 20px rgba(0,255,255,0.4);
+  animation: shieldPopParticle 0.5s ease-out forwards;
+  z-index: 99;
+}
+
+@keyframes shieldPopParticle {
+  0% {
+    transform: translate(0, 0) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(var(--tx), var(--ty)) scale(0.3);
+    opacity: 0;
+  }
+}
+
+@keyframes shield-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.8;
+    border-color: rgba(0,255,255,0.6);
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 1;
+    border-color: rgba(0,255,255,0.9);
+  }
+}
 .shark__name {
 
   position: absolute;
@@ -454,17 +533,25 @@
 .eat-pop { position: absolute; width: 22px; height: 22px; border-radius: 999px; border: 2px solid rgba(125,227,255,.6); pointer-events: none; mix-blend-mode: screen; transform: translate(-50%, -50%) scale(0.6); opacity: .85; animation: eat-pop 300ms ease-out forwards; z-index: 3; }
 @keyframes eat-pop { to { transform: translate(-50%, -50%) scale(1.8); opacity: 0; border-color: rgba(125,227,255,0); } }
 
-/* Stats container - holds level and score bars side by side */
+/* Stats container - 3-column layout: Level | Center | Score */
 .stats-container {
   position: absolute;
   left: 50%;
   top: 8px;
   transform: translateX(-50%);
   display: flex;
-  gap: 12px;
-  align-items: center;
+  gap: 16px;
+  align-items: flex-start;
   z-index: 10;
   pointer-events: auto;
+}
+
+/* Center column - holds shark name and abilities vertically */
+.center-column {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
 }
 
 /* Current shark chip (compact, sleek, low-cost) */
@@ -496,8 +583,174 @@
   text-shadow: 0 0 8px rgba(0, 200, 255, 0.35);
 }
 
+/* Abilities Container */
+.abilities-container {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Ability Icon */
+.ability-icon {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(8,12,20,.85), rgba(10,14,24,.8));
+  border: 2px solid rgba(0, 212, 255, 0.3);
+  cursor: pointer;
+  transition: all 250ms cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+  box-shadow:
+    0 4px 12px rgba(0,0,0,0.4),
+    0 0 16px rgba(0, 180, 255, 0.15),
+    inset 0 1px 0 rgba(0, 212, 255, 0.15);
+}
+
+.ability-icon:hover {
+  border-color: rgba(0, 212, 255, 0.6);
+  transform: translateY(-2px) scale(1.05);
+  box-shadow:
+    0 6px 20px rgba(0,0,0,0.5),
+    0 0 24px rgba(0, 212, 255, 0.4),
+    inset 0 1px 0 rgba(0, 212, 255, 0.25);
+}
+
+.ability-icon__img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 8px;
+  image-rendering: crisp-edges;
+  image-rendering: pixelated;
+  position: relative;
+  z-index: 1;
+}
+
+/* Cooldown Overlay */
+.ability-icon__cooldown {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 0%;
+  background: linear-gradient(180deg, rgba(0,0,0,0.3), rgba(0,0,0,0.7));
+  backdrop-filter: blur(2px);
+  transition: height 100ms linear;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.ability-icon.on-cooldown {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ability-icon.on-cooldown:hover {
+  transform: none;
+  border-color: rgba(0, 212, 255, 0.3);
+}
+
+/* Active State Glow */
+.ability-icon.active {
+  border-color: rgba(0, 255, 255, 0.9);
+  animation: ability-pulse 1.5s ease-in-out infinite;
+  box-shadow:
+    0 6px 20px rgba(0,0,0,0.5),
+    0 0 30px rgba(0, 255, 255, 0.6),
+    0 0 50px rgba(0, 255, 255, 0.3),
+    inset 0 0 20px rgba(0, 255, 255, 0.2);
+}
+
+@keyframes ability-pulse {
+  0%, 100% {
+    box-shadow:
+      0 6px 20px rgba(0,0,0,0.5),
+      0 0 30px rgba(0, 255, 255, 0.6),
+      0 0 50px rgba(0, 255, 255, 0.3),
+      inset 0 0 20px rgba(0, 255, 255, 0.2);
+  }
+  50% {
+    box-shadow:
+      0 6px 20px rgba(0,0,0,0.5),
+      0 0 40px rgba(0, 255, 255, 0.8),
+      0 0 70px rgba(0, 255, 255, 0.5),
+      inset 0 0 30px rgba(0, 255, 255, 0.3);
+  }
+}
+
+/* Tooltip - appears below the icon */
+.ability-icon__tooltip {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%) translateY(-4px);
+  background: linear-gradient(135deg, rgba(8,12,20,.95), rgba(10,14,24,.92));
+  border: 1px solid rgba(0, 212, 255, 0.4);
+  border-radius: 10px;
+  padding: 10px 12px;
+  min-width: 180px;
+  max-width: 220px;
+  opacity: 0;
+  pointer-events: none;
+  transition: all 250ms cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 100;
+  box-shadow:
+    0 8px 24px rgba(0,0,0,0.6),
+    0 0 20px rgba(0, 212, 255, 0.2);
+}
+
+.ability-icon:hover .ability-icon__tooltip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.ability-icon__tooltip-name {
+  font-size: 13px;
+  font-weight: 800;
+  color: #00d4ff;
+  margin-bottom: 4px;
+  text-shadow: 0 0 8px rgba(0, 212, 255, 0.5);
+}
+
+.ability-icon__tooltip-desc {
+
+
+  font-size: 11px;
+  color: #9bc7e6;
+  line-height: 1.4;
+  margin-bottom: 6px;
+}
+
+.ability-icon__tooltip-key {
+  font-size: 10px;
+  font-weight: 700;
+  color: #ffd44a;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255,255,255,0.1);
+}
+
+/* Tooltip arrow - points upward since tooltip is below */
+.ability-icon__tooltip::after {
+  content: "";
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-bottom-color: rgba(0, 212, 255, 0.4);
+}
+
 
 /* Level bar (yellow theme) - futuristic optimized */
+
+/* Fix: allow tooltips to overflow the icon bounds */
+.abilities-container { position: relative; overflow: visible; }
+.ability-icon { overflow: visible; }
+
 .levelbar {
   width: min(280px, 35vw);
   padding: 10px 12px;

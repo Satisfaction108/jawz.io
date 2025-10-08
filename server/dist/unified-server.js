@@ -165,6 +165,18 @@ const sharkTailOffsets = new Map(); // Tail positions per shark
 // Shark collision constants
 const SHARK_COLLISION_DAMAGE = 10; // damage dealt when sharks collide
 const SHARK_COLLISION_COOLDOWN_MS = 1000; // 1 second cooldown between collision damage
+let abilitiesConfig = null;
+// Load abilities configuration
+async function loadAbilitiesConfig() {
+    try {
+        const data = await fs_1.promises.readFile(path.join('server', 'abilities', 'abilities.json'), 'utf-8');
+        abilitiesConfig = JSON.parse(data);
+        console.log('✓ Abilities configuration loaded');
+    }
+    catch (err) {
+        console.error('Failed to load abilities config:', err);
+    }
+}
 function parseBinaryMask(txt, w, h) {
     // Keep only 0/1 and newlines, flatten
     const flat = txt.replace(/[^01\n]/g, '').replace(/\n+/g, '');
@@ -1038,6 +1050,10 @@ io.on('connection', (socket) => {
             dead: false,
             level: 1,
             sharkType: 'Baby Shark.png',
+            abilities: {
+                quickDash: { cooldownUntil: 0, activeUntil: 0 },
+                bubbleShield: { cooldownUntil: 0, activeUntil: 0 }
+            }
         };
         console.log(`Player ${sanitizedUsername} spawned at (${gameState.players[socket.id].x}, ${gameState.players[socket.id].y})`);
         // Send current game state to the new player (include server timestamp for smoother client interpolation)
@@ -1106,7 +1122,10 @@ io.on('connection', (socket) => {
             const dx = clampedX - prev.x;
             const dy = clampedY - prev.y;
             const dist = Math.hypot(dx, dy);
-            const maxDist = SELF_SPEED * dt * SPEED_TOL;
+            // Allow higher speed during quickDash ability
+            const isDashing = me.abilities?.quickDash && now < me.abilities.quickDash.activeUntil;
+            const speedMultiplier = isDashing ? 3.5 : 1; // 3.5x speed during dash
+            const maxDist = SELF_SPEED * dt * SPEED_TOL * speedMultiplier;
             let nx = clampedX, ny = clampedY;
             if (dist > maxDist) {
                 const k = maxDist / (dist || 1);
@@ -1367,6 +1386,53 @@ io.on('connection', (socket) => {
         console.log(`[DEV] ${me.username} leveled up to ${newLevel} (score: ${me.score})`);
         dirty = true;
     });
+    // Ability activation
+    socket.on('ability:activate', (data) => {
+        const me = gameState.players[socket.id];
+        if (!me || me.dead)
+            return;
+        if (!abilitiesConfig)
+            return;
+        const { abilityId } = data;
+        const now = Date.now();
+        // Validate ability exists
+        if (!me.abilities || !me.abilities[abilityId])
+            return;
+        const abilityState = me.abilities[abilityId];
+        const config = abilitiesConfig.abilities[abilityId];
+        // Check cooldown
+        if (now < abilityState.cooldownUntil) {
+            console.log(`[Ability] ${me.username} tried to use ${abilityId} but it's on cooldown`);
+            return;
+        }
+        // Check if already active
+        if (now < abilityState.activeUntil) {
+            console.log(`[Ability] ${me.username} tried to use ${abilityId} but it's already active`);
+            return;
+        }
+        // Activate ability
+        const durationMs = config.durationSeconds * 1000;
+        const cooldownMs = config.cooldownSeconds * 1000;
+        abilityState.activeUntil = now + durationMs;
+        abilityState.cooldownUntil = now + durationMs + cooldownMs;
+        console.log(`[Ability] ${me.username} activated ${abilityId}`);
+        // Apply ability-specific effects
+        if (abilityId === 'quickDash') {
+            // Speed boost is handled client-side for smooth visuals
+            // Server just tracks the state
+        }
+        else if (abilityId === 'bubbleShield') {
+            // Shield state is tracked, collision logic will check this
+        }
+        // Broadcast ability activation to all clients
+        io.emit('ability:activated', {
+            playerId: socket.id,
+            abilityId,
+            activeUntil: abilityState.activeUntil,
+            cooldownUntil: abilityState.cooldownUntil
+        });
+        dirty = true;
+    });
     // Player respawn request (after death)
     socket.on('player:respawn', () => {
         console.log(`Respawn request from ${socket.id}`);
@@ -1394,6 +1460,10 @@ io.on('connection', (socket) => {
             dead: false,
             level: 1,
             sharkType: 'Baby Shark.png',
+            abilities: {
+                quickDash: { cooldownUntil: 0, activeUntil: 0 },
+                bubbleShield: { cooldownUntil: 0, activeUntil: 0 }
+            }
         };
         lastUpdate.set(socket.id, Date.now());
         lastPos.set(socket.id, { x: me.x, y: me.y });
@@ -1460,17 +1530,32 @@ setInterval(() => {
                 if (!p || p.id === b.ownerId || p.dead)
                     continue;
                 if (bubbleHitsShark(p, checkX, checkY)) {
-                    // Deal damage
-                    recordDamage(p.id, b.ownerId, BULLET_DAMAGE, now);
-                    p.hp = Math.max(0, (p.hp ?? 100) - BULLET_DAMAGE);
+                    // Check if player has active bubble shield
+                    const hasShield = p.abilities?.bubbleShield && now < p.abilities.bubbleShield.activeUntil;
+                    if (hasShield && p.abilities?.bubbleShield) {
+                        // Shield blocks the bullet - deactivate shield immediately
+                        p.abilities.bubbleShield.activeUntil = 0;
+                        // Broadcast shield deactivation
+                        io.emit('ability:deactivated', {
+                            playerId: p.id,
+                            abilityId: 'bubbleShield',
+                            reason: 'hit'
+                        });
+                        console.log(`[Ability] ${p.username}'s bubble shield blocked a hit`);
+                    }
+                    else {
+                        // No shield - deal damage
+                        recordDamage(p.id, b.ownerId, BULLET_DAMAGE, now);
+                        p.hp = Math.max(0, (p.hp ?? 100) - BULLET_DAMAGE);
+                    }
                     // ALWAYS delete the bullet on contact, even if it's the killing blow
                     // DO NOT update position - delete immediately so client never sees it at collision point
                     delete bubbles[id];
                     projDirty = true;
                     dirty = true; // player state changed
                     hit = true;
-                    // Handle death
-                    if (p.hp <= 0) {
+                    // Handle death (only if no shield or shield didn't prevent damage)
+                    if (!hasShield && p.hp <= 0) {
                         const dyingId = p.id;
                         const s = io.sockets.sockets.get(dyingId);
                         s?.emit('player:died');
@@ -1549,6 +1634,7 @@ setInterval(() => {
 // Kick off server-side mask loading and continuous collision checks
 loadServerMasks().catch(() => { });
 loadLevelProgression().catch(() => { });
+loadAbilitiesConfig().catch(() => { });
 loadSharkEvolutions()
     .then(() => preloadAllSharkMasks())
     .catch(() => { });

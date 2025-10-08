@@ -1,0 +1,18 @@
+{
+  "abilities": {
+    "quickDash": {
+      "name": "Quick Dash",
+      "description": "Performs a short forward burst to quickly reposition or evade attacks. Press K to activate.",
+      "durationSeconds": 0.5,
+      "cooldownSeconds": 5,
+      "activationKey": "K"
+    },
+    "bubbleShield": {
+      "name": "Bubble Shield",
+      "description": "Generates a temporary shield that blocks one bubble bullet hit before breaking. Press L to activate.",
+      "durationSeconds": 3,
+      "cooldownSeconds": 5,
+      "activationKey": "L"
+    }
+  }
+}
