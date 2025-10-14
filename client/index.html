@@ -129,6 +129,8 @@
       <div id="world" class="world"><div id="projectiles" class="projectiles"></div></div>
       <div id="fx-vignette" class="fx-vignette"></div>
       <div id="fx-critical" class="fx-critical"></div>
+      <div id="fx-particles" class="fx-particles"></div>
+      <div id="fx-chromatic" class="fx-chromatic"></div>
 
       <div class="hud">
         <div class="panel">
@@ -140,6 +142,14 @@
         <div class="minimap">
           <canvas id="minimap" width="200" height="200"></canvas>
         </div>
+        <!-- HP Bar (top center) -->
+        <div class="hpbar" role="status" aria-live="polite">
+          <div class="hpbar__label">HP</div>
+          <div class="hpbar__track"><div id="hp-fill" class="hpbar__fill" style="width:100%"></div></div>
+          <div class="hpbar__status"><span id="hp-status">Healthy</span></div>
+          <div class="hpbar__value"><span id="hp-text">100</span>%</div>
+        </div>
+
         <div class="stats-container">
           <!-- Level bar (left column) -->
           <div class="levelbar" role="status" aria-live="polite">

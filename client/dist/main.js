@@ -142,10 +142,10 @@ const FX = {
     waterTrail: true, // Throttled to reduce DOM creation
     scorePopup: true,
 };
-// Performance: limit concurrent effect elements
-const MAX_RIPPLES = 8;
-const MAX_TRAIL_BUBBLES = 12;
-const MAX_SCORE_POPUPS = 6;
+// Performance: limit concurrent effect elements - OPTIMIZED for better FPS
+const MAX_RIPPLES = 5; // Reduced from 8
+const MAX_TRAIL_BUBBLES = 12; // Reduced from 24 (150ms spawn = ~8 concurrent at 900ms lifetime)
+const MAX_SCORE_POPUPS = 4; // Reduced from 6
 let activeRipples = 0;
 let activeTrailBubbles = 0;
 let activeScorePopups = 0;
@@ -156,12 +156,21 @@ const deathAnimTriggered = new Set();
 // FX state and helpers
 let fxVignetteEl;
 let fxCriticalEl;
+let fxParticlesEl;
+let fxChromaticEl;
 let shakeMag = 0; // pixels of max jitter, decays per frame
 const lastHpById = new Map();
 const lastTrailTimeById = new Map();
 const lastPosById = new Map();
 let lastScoreSelf = 0;
 let lastSharkNameSelf = '';
+// HP Bar elements
+let hpFillEl = null;
+let hpTextEl = null;
+let hpStatusEl = null;
+// Particle pool for performance - OPTIMIZED
+const MAX_PARTICLES = 30; // Reduced from 50
+let activeParticles = 0;
 function addScreenShake(intensity) {
     if (!FX.damageShake)
         return;
@@ -180,6 +189,101 @@ function updateCriticalOverlay(curHp) {
         fxCriticalEl.classList.add('active');
     else
         fxCriticalEl.classList.remove('active');
+    // Update chromatic aberration for low HP
+    if (fxChromaticEl) {
+        if (curHp <= 25)
+            fxChromaticEl.classList.add('active');
+        else
+            fxChromaticEl.classList.remove('active');
+    }
+}
+// Update HP bar in HUD
+function updateHPBar(hp) {
+    if (!hpFillEl || !hpTextEl || !hpStatusEl)
+        return;
+    const hpPercent = Math.max(0, Math.min(100, hp));
+    hpFillEl.style.width = `${hpPercent}%`;
+    hpTextEl.textContent = Math.round(hpPercent).toString();
+    // Update status text and colors
+    let status = 'Healthy';
+    let statusClass = 'healthy';
+    if (hpPercent <= 15) {
+        status = 'Critical';
+        statusClass = 'critical';
+    }
+    else if (hpPercent <= 35) {
+        status = 'Injured';
+        statusClass = 'injured';
+    }
+    else if (hpPercent <= 60) {
+        status = 'Hurt';
+        statusClass = 'injured';
+    }
+    else if (hpPercent <= 85) {
+        status = 'Good';
+        statusClass = 'healthy';
+    }
+    hpStatusEl.textContent = status;
+    // Update classes
+    hpFillEl.className = `hpbar__fill ${statusClass}`;
+    hpStatusEl.className = `hpbar__status ${statusClass}`;
+}
+// Spawn particle effect
+function spawnParticle(x, y, type, tx = 0, ty = 0) {
+    if (!fxParticlesEl || activeParticles >= MAX_PARTICLES)
+        return;
+    activeParticles++;
+    const el = document.createElement('div');
+    el.className = `particle particle-${type}`;
+    const size = type === 'ambient' ? 8 + Math.random() * 12 :
+        type === 'evolution' ? 6 + Math.random() * 10 :
+            type === 'sparkle' ? 4 + Math.random() * 6 :
+                5 + Math.random() * 8;
+    el.style.width = `${size}px`;
+    el.style.height = `${size}px`;
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    if (type !== 'ambient') {
+        el.style.setProperty('--tx', `${tx}px`);
+        el.style.setProperty('--ty', `${ty}px`);
+    }
+    fxParticlesEl.appendChild(el);
+    const duration = type === 'ambient' ? 8000 :
+        type === 'evolution' ? 1200 :
+            type === 'sparkle' ? 800 : 600;
+    setTimeout(() => {
+        el.remove();
+        activeParticles--;
+    }, duration);
+}
+// Spawn evolution burst effect
+function spawnEvolutionBurst(x, y) {
+    // Create screen flash
+    const flash = document.createElement('div');
+    flash.className = 'evolution-flash';
+    document.getElementById('game')?.appendChild(flash);
+    setTimeout(() => flash.remove(), 800);
+    // Spawn burst particles
+    const particleCount = 30;
+    for (let i = 0; i < particleCount; i++) {
+        const angle = (Math.PI * 2 * i) / particleCount;
+        const distance = 80 + Math.random() * 120;
+        const tx = Math.cos(angle) * distance;
+        const ty = Math.sin(angle) * distance;
+        setTimeout(() => {
+            spawnParticle(x, y, 'evolution', tx, ty);
+        }, i * 15);
+    }
+    // Spawn sparkles - OPTIMIZED: reduced count from 20 to 8
+    for (let i = 0; i < 8; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const distance = 40 + Math.random() * 80;
+        const tx = Math.cos(angle) * distance;
+        const ty = Math.sin(angle) * distance;
+        setTimeout(() => {
+            spawnParticle(x, y, 'sparkle', tx, ty);
+        }, i * 40); // Increased delay spacing
+    }
 }
 function spawnRipple(x, y, size = 37) {
     if (!FX.waterRipples || activeRipples >= MAX_RIPPLES)
@@ -203,64 +307,62 @@ function markSharkHit(id) {
     el.classList.add('shark--hit');
     setTimeout(() => el.classList.remove('shark--hit'), 140);
 }
-function spawnTrailBubbleAt(x, y, angle, sharkType) {
+function spawnTrailBubbleAt(x, y, angle, sharkType, velocity) {
     if (!FX.waterTrail || activeTrailBubbles >= MAX_TRAIL_BUBBLES)
         return;
-    // Always spawn exactly 1 bubble from the exact center of the tail
-    const numBubbles = 1;
-    for (let i = 0; i < numBubbles; i++) {
-        if (activeTrailBubbles >= MAX_TRAIL_BUBBLES)
-            break;
-        activeTrailBubbles++;
-        const el = document.createElement('div');
-        el.className = 'trail-bubble';
-        // Compute world-space tail point by rotating a sprite-local point on the tail edge around sprite center
-        const rot = angle + Math.PI; // matches sprite rotate offset
-        const cos = Math.cos(rot), sin = Math.sin(rot);
-        const key = sharkType || 'Baby Shark.png';
-        const s = sharkScales.get(key) || 1;
-        let lx = SHARK_HALF, ly = SHARK_HALF; // default: center (in render space)
-        // Account for horizontal flip when shark is facing right
-        let deg = (angle * 180 / Math.PI) % 360;
-        if (deg < 0)
-            deg += 360;
-        const flipY = (deg > 270 || deg < 90) ? -1 : 1; // right-facing quadrants => flip
-        // Use shark-specific tail offset if available (from server)
-        const tailOffset = sharkTailOffsets.get(key);
-        if (tailOffset) {
-            // Server provides tail offset in mask space relative to center (128, 128)
-            // Convert to render space: add to center (128) then scale by base and visual scale
-            // Apply flip to Y offset
-            lx = (128 + tailOffset.x) * SHARK_SCALE * s;
-            ly = (128 + tailOffset.y * flipY) * SHARK_SCALE * s;
-        }
-        else if (tailEdge && tailEdge.length) {
-            // Fallback: use the median point along the tail edge as the center
-            const mid = tailEdge[Math.floor(tailEdge.length / 2)];
-            lx = mid.x * SHARK_SCALE * s;
-            ly = mid.y * SHARK_SCALE * s * flipY; // Apply flip
-        }
-        else if (tailAnchor) {
-            // Fallback: use computed tail anchor from baby shark alpha
-            lx = tailAnchor.x * SHARK_SCALE * s;
-            ly = tailAnchor.y * SHARK_SCALE * s * flipY; // Apply flip
-        }
-        const dx = lx - SHARK_HALF * s;
-        const dy = ly - SHARK_HALF * s;
-        const ax = x + SHARK_HALF * s + (dx * cos - dy * sin);
-        const ay = y + SHARK_HALF * s + (dx * sin + dy * cos);
-        // Emit slightly behind the facing direction from the exact tail center (no sideways spread)
-        const baseOff = 6 * s; // scale with shark size
-        const fx = Math.cos(angle), fy = Math.sin(angle);
-        const bx = ax - fx * baseOff;
-        const by = ay - fy * baseOff;
-        // Use CSS variables consumed by the animation so transform isn't overridden
-        // Trail bubble is 16px, so offset by half (8px) - scaled to 2/3 = ~11px, offset by ~5px
-        el.style.setProperty('--x', `${Math.round(bx - 5)}px`); // 2/3 of 8px offset
-        el.style.setProperty('--y', `${Math.round(by - 5)}px`);
-        world.appendChild(el);
-        setTimeout(() => { el.remove(); activeTrailBubbles--; }, 900);
+    const key = sharkType || 'Baby Shark.png';
+    const s = sharkScales.get(key) || 1;
+    // Fixed size scaling: bubble size scales proportionally with shark size
+    const bubbleSize = s; // Direct proportional scaling with shark evolution
+    // World-space tail position: center minus facing direction vector
+    const cx = x + SHARK_HALF * s;
+    const cy = y + SHARK_HALF * s;
+    const tailDistance = SHARK_HALF * s * 0.85; // 85% of half-size behind center
+    const baseTailX = cx - Math.cos(angle) * tailDistance;
+    const baseTailY = cy - Math.sin(angle) * tailDistance;
+    // Spawn a single bubble with slight perpendicular offset for natural variation
+    if (activeTrailBubbles >= MAX_TRAIL_BUBBLES)
+        return;
+    activeTrailBubbles++;
+    const el = document.createElement('div');
+    el.className = 'trail-bubble';
+    // Perpendicular width jitter
+    const perpAngle = angle + Math.PI / 2; // perpendicular to movement
+    const perpOffset = (Math.random() - 0.5) * SHARK_SIZE * s * 0.12; // ±12% of shark size
+    const ax = baseTailX + Math.cos(perpAngle) * perpOffset;
+    const ay = baseTailY + Math.sin(perpAngle) * perpOffset;
+    // Size: keep original bubble size (no upscaling)
+    const sizeMult = bubbleSize; // original behavior
+    const bubbleHalfSize = 5.5 * sizeMult; // 11px * sizeMult / 2
+    el.style.setProperty('--x', `${Math.round(ax - bubbleHalfSize)}px`);
+    el.style.setProperty('--y', `${Math.round(ay - bubbleHalfSize)}px`);
+    el.style.setProperty('--size-mult', `${sizeMult}`);
+    // Velocity-based animation speed with slight variation
+    const vel = velocity || 0;
+    const baseAnimDuration = vel > 6 ? 700 : 900;
+    const animDuration = baseAnimDuration + (Math.random() * 100 - 50); // ±50ms variation
+    el.style.animationDuration = `${animDuration}ms`;
+    world.appendChild(el);
+    setTimeout(() => { el.remove(); activeTrailBubbles--; }, animDuration);
+    // Wake effect for fast movement (velocity > 6) - OPTIMIZED: reduced probability
+    if (vel > 8 && Math.random() < 0.08) { // Reduced from 30% to 8%, increased velocity threshold
+        spawnWakeEffect(x, y, angle, sharkType);
     }
+}
+// Wake effect for fast movement
+function spawnWakeEffect(x, y, angle, sharkType) {
+    const el = document.createElement('div');
+    el.className = 'wake-effect';
+    const key = sharkType || 'Baby Shark.png';
+    const s = sharkScales.get(key) || 1;
+    // Position at shark center
+    const cx = x + SHARK_HALF * s;
+    const cy = y + SHARK_HALF * s;
+    el.style.left = `${cx}px`;
+    el.style.top = `${cy}px`;
+    el.style.setProperty('--angle', `${angle}rad`);
+    world.appendChild(el);
+    setTimeout(() => el.remove(), 600);
 }
 // Spawn shield pop effect (cyan bubble burst)
 function spawnShieldPopEffect(x, y, s = 1) {
@@ -296,7 +398,7 @@ function spawnShieldPopEffect(x, y, s = 1) {
         setTimeout(() => particle.remove(), 500);
     }
 }
-// Spawn evolution smoke particle explosion (Brawl Stars style)
+// Spawn evolution smoke particle explosion (Enhanced with cyan-purple gradient and sparkles)
 function spawnEvolutionSmoke(x, y, s = 1) {
     const centerX = x + SHARK_HALF * s;
     const centerY = y + SHARK_HALF * s;
@@ -310,18 +412,22 @@ function spawnEvolutionSmoke(x, y, s = 1) {
     veil.style.top = `${centerY - veilSize / 2}px`;
     world.appendChild(veil);
     setTimeout(() => veil.remove(), 600);
-    // Radial particles
-    const numParticles = 16; // fuller burst
+    // Enhanced radial particles - OPTIMIZED: reduced from 24-32 to 12-16 particles
+    const numParticles = 12 + Math.floor(Math.random() * 5); // 12-16 particles
     for (let i = 0; i < numParticles; i++) {
         const particle = document.createElement('div');
-        particle.className = 'evolution-smoke';
+        // Varied particle types: smoke (70%), sparkles (30%)
+        const isSparkle = Math.random() < 0.3;
+        particle.className = isSparkle ? 'evolution-sparkle' : 'evolution-smoke';
         // Random angle for radial spread
         const angle = (Math.PI * 2 * i) / numParticles + (Math.random() - 0.5) * 0.4;
         const speed = 42 + Math.random() * 34; // ~42-76px spread
         const offsetX = Math.cos(angle) * speed;
         const offsetY = Math.sin(angle) * speed;
         // Random size variation
-        const size = (18 + Math.random() * 18) * (0.85 + 0.15 * s); // scale subtly with size
+        const size = isSparkle
+            ? (8 + Math.random() * 8) * (0.85 + 0.15 * s) // Smaller sparkles
+            : (18 + Math.random() * 18) * (0.85 + 0.15 * s); // Larger smoke
         particle.style.width = `${size}px`;
         particle.style.height = `${size}px`;
         // Set initial position at shark center
@@ -331,9 +437,38 @@ function spawnEvolutionSmoke(x, y, s = 1) {
         particle.style.setProperty('--offset-x', `${offsetX}px`);
         particle.style.setProperty('--offset-y', `${offsetY}px`);
         particle.style.setProperty('--rotation', `${Math.random() * 360}deg`);
+        // Cyan to purple gradient based on particle index
+        const colorProgress = i / numParticles;
+        particle.style.setProperty('--color-progress', `${colorProgress}`);
+        // Staggered timing for more dynamic effect
+        const delay = Math.random() * 100; // 0-100ms delay
+        particle.style.animationDelay = `${delay}ms`;
         world.appendChild(particle);
-        // Remove after animation completes
-        setTimeout(() => particle.remove(), 750);
+        // Remove after animation completes (accounting for delay)
+        const duration = isSparkle ? 650 : 750;
+        setTimeout(() => particle.remove(), duration + delay);
+    }
+    // Add secondary ring of sparkles for extra flair - OPTIMIZED: reduced from 12 to 6
+    const numSparkles = 6;
+    for (let i = 0; i < numSparkles; i++) {
+        const sparkle = document.createElement('div');
+        sparkle.className = 'evolution-sparkle evolution-sparkle--outer';
+        const angle = (Math.PI * 2 * i) / numSparkles;
+        const speed = 60 + Math.random() * 30; // Outer ring
+        const offsetX = Math.cos(angle) * speed;
+        const offsetY = Math.sin(angle) * speed;
+        const size = (6 + Math.random() * 6) * (0.85 + 0.15 * s);
+        sparkle.style.width = `${size}px`;
+        sparkle.style.height = `${size}px`;
+        sparkle.style.left = `${centerX - size / 2}px`;
+        sparkle.style.top = `${centerY - size / 2}px`;
+        sparkle.style.setProperty('--offset-x', `${offsetX}px`);
+        sparkle.style.setProperty('--offset-y', `${offsetY}px`);
+        sparkle.style.setProperty('--rotation', `${Math.random() * 360}deg`);
+        const delay = 50 + Math.random() * 100; // Slightly delayed
+        sparkle.style.animationDelay = `${delay}ms`;
+        world.appendChild(sparkle);
+        setTimeout(() => sparkle.remove(), 700 + delay);
     }
 }
 function spawnScorePopup(playerId, delta) {
@@ -362,7 +497,7 @@ function spawnScorePopup(playerId, delta) {
             activeScorePopupEls.splice(idx, 1);
     }, 800);
 }
-// Spawn death particles and trigger death animation
+// Spawn death particles and trigger death animation (Enhanced with color transitions and debris)
 function triggerDeathAnimation(playerId) {
     const p = players[playerId];
     if (!p)
@@ -383,25 +518,62 @@ function triggerDeathAnimation(playerId) {
         el.style.setProperty('--death-angle', angle);
         el.style.setProperty('--death-flip', flip);
     }
-    // Spawn death particles (12 particles in random directions)
+    // Enhanced death particles - OPTIMIZED: reduced from 24 to 12 particles
     const cx = p.x + SHARK_HALF;
     const cy = p.y + SHARK_HALF;
-    for (let i = 0; i < 12; i++) {
+    const numParticles = 12;
+    for (let i = 0; i < numParticles; i++) {
         const particle = document.createElement('div');
-        particle.className = 'death-particle';
-        const angle = (i / 12) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
-        const dist = 40 + Math.random() * 53; // 2/3 of (60 + 80) = 40 + 53
+        // Mix of particle types: energy particles (60%), debris (40%)
+        const isDebris = Math.random() < 0.4;
+        particle.className = isDebris ? 'death-debris' : 'death-particle';
+        // Varied trajectories - some go far, some stay close
+        const angle = (i / numParticles) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
+        const dist = isDebris
+            ? 30 + Math.random() * 40 // Debris doesn't travel as far
+            : 40 + Math.random() * 60; // Energy particles travel further
         const px = Math.cos(angle) * dist;
         const py = Math.sin(angle) * dist;
+        // Add gravity effect to some particles
+        const gravity = isDebris ? 20 + Math.random() * 20 : 0;
         particle.style.setProperty('--px', `${px}px`);
-        particle.style.setProperty('--py', `${py}px`);
+        particle.style.setProperty('--py', `${py + gravity}px`);
+        particle.style.setProperty('--gravity', `${gravity}px`);
+        // Color transition progress (cyan → red → fade)
+        const colorPhase = i / numParticles;
+        particle.style.setProperty('--color-phase', `${colorPhase}`);
+        // Size variation
+        const size = isDebris
+            ? 4 + Math.random() * 4 // 4-8px debris
+            : 5 + Math.random() * 3; // 5-8px energy
+        particle.style.width = `${size}px`;
+        particle.style.height = `${size}px`;
         particle.style.left = `${cx}px`;
         particle.style.top = `${cy}px`;
+        // Staggered timing for more dynamic effect
+        const delay = Math.random() * 80;
+        particle.style.animationDelay = `${delay}ms`;
         world.appendChild(particle);
-        setTimeout(() => particle.remove(), 1000);
+        setTimeout(() => particle.remove(), 1000 + delay);
     }
-    // Large ripple effect at death location (2/3 of 120px = 80px)
-    spawnRipple(Math.round(cx), Math.round(cy), 80);
+    // Multiple impact ripples with staggered timing - OPTIMIZED: reduced from 3 to 2 ripples
+    spawnRipple(Math.round(cx), Math.round(cy), 80); // Initial large ripple
+    setTimeout(() => spawnRipple(Math.round(cx), Math.round(cy), 50), 120); // Secondary ripple
+    // Spawn additional energy burst particles - OPTIMIZED: reduced from 8 to 4
+    for (let i = 0; i < 4; i++) {
+        const burst = document.createElement('div');
+        burst.className = 'death-energy-burst';
+        const angle = (i / 8) * Math.PI * 2;
+        const speed = 50 + Math.random() * 30;
+        const offsetX = Math.cos(angle) * speed;
+        const offsetY = Math.sin(angle) * speed;
+        burst.style.setProperty('--offset-x', `${offsetX}px`);
+        burst.style.setProperty('--offset-y', `${offsetY}px`);
+        burst.style.left = `${cx}px`;
+        burst.style.top = `${cy}px`;
+        world.appendChild(burst);
+        setTimeout(() => burst.remove(), 800);
+    }
     // Note: Shark element will be removed by server's 'player:left' event after 1.2s
     // This matches the death animation duration
 }
@@ -1270,14 +1442,26 @@ function render() {
         // --- FX: damage detection, trail emission, critical overlay ---
         const curHp = Math.max(0, Math.min(100, p.hp ?? 100));
         const prevHp = lastHpById.get(p.id) ?? curHp;
-        if (p.id === selfId)
+        if (p.id === selfId) {
             updateCriticalOverlay(curHp);
+            updateHPBar(curHp);
+        }
         if (curHp < prevHp) {
             markSharkHit(p.id);
             spawnRipple(Math.round(p.x + SHARK_HALF), Math.round(p.y + SHARK_HALF), 56);
             if (p.id === selfId) {
                 addScreenShake(Math.min(10, (prevHp - curHp) * 0.25));
                 pulseVignette();
+                // Spawn impact particles on damage (center of screen since camera follows player)
+                const screenCenterX = window.innerWidth / 2;
+                const screenCenterY = window.innerHeight / 2;
+                for (let i = 0; i < 5; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const dist = 20 + Math.random() * 30;
+                    setTimeout(() => {
+                        spawnParticle(screenCenterX, screenCenterY, 'impact', Math.cos(angle) * dist, Math.sin(angle) * dist);
+                    }, i * 20);
+                }
             }
         }
         lastHpById.set(p.id, curHp);
@@ -1285,12 +1469,19 @@ function render() {
         const nowMs2 = performance.now();
         const lastT = lastTrailTimeById.get(p.id) || 0;
         const prevPos = lastPosById.get(p.id);
-        // Check if player has active speed boost
-        const isDashing = p.id === selfId && abilityStates.get('quickDash') && Date.now() < abilityStates.get('quickDash').activeUntil;
-        const trailInterval = isDashing ? 80 : 250; // Faster trail during dash
-        // Increased throttle from 160ms to 250ms for better performance (80ms during dash)
+        // Spawn water trail bubble every 150ms while moving - OPTIMIZED from 50ms
+        const trailInterval = 150;
+        // Calculate velocity for velocity-based particle spawning
+        let velocity = 0;
+        if (prevPos) {
+            const dx = p.x - prevPos.x;
+            const dy = p.y - prevPos.y;
+            const dt = (nowMs2 - lastT) / 1000; // Convert to seconds
+            velocity = dt > 0 ? Math.sqrt(dx * dx + dy * dy) / dt : 0;
+        }
+        // Spawn one bubble every 150ms when moving - OPTIMIZED from 50ms for better FPS
         if (nowMs2 - lastT > trailInterval && prevPos && (Math.abs(prevPos.x - p.x) + Math.abs(prevPos.y - p.y) > 2)) {
-            spawnTrailBubbleAt(p.x, p.y, p.angle, p.sharkType);
+            spawnTrailBubbleAt(p.x, p.y, p.angle, p.sharkType, velocity);
             lastTrailTimeById.set(p.id, nowMs2);
         }
         lastPosById.set(p.id, { x: p.x, y: p.y });
@@ -1456,6 +1647,39 @@ function step(dt) {
         socket.emit('player:move', { x: p.x, y: p.y, angle: p.angle });
     }
 }
+// Add ambient light rays to the world
+function addLightRays() {
+    if (!world)
+        return;
+    // Remove existing light rays
+    const existingRays = world.querySelectorAll('.light-ray');
+    existingRays.forEach(ray => ray.remove());
+    // Add 5-7 light rays at random positions
+    const rayCount = 5 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < rayCount; i++) {
+        const ray = document.createElement('div');
+        ray.className = 'light-ray';
+        ray.style.left = `${(i / rayCount) * 100 + Math.random() * 10}%`;
+        ray.style.animationDelay = `${Math.random() * 5}s`;
+        ray.style.animationDuration = `${12 + Math.random() * 6}s`;
+        world.appendChild(ray);
+    }
+}
+// Ambient particle spawning (throttled) - OPTIMIZED: reduced frequency and count
+let lastAmbientSpawn = 0;
+function spawnAmbientParticles() {
+    const now = performance.now();
+    if (now - lastAmbientSpawn < 2000)
+        return; // OPTIMIZED: Spawn every 2000ms (was 800ms)
+    lastAmbientSpawn = now;
+    // OPTIMIZED: Spawn only 1 ambient particle (was 2-3)
+    const count = 1;
+    for (let i = 0; i < count; i++) {
+        const x = Math.random() * window.innerWidth;
+        const y = window.innerHeight + 20; // Start below screen
+        spawnParticle(x, y, 'ambient');
+    }
+}
 function loop() {
     const now = performance.now();
     const dt = Math.min(0.033, (now - lastFrame) / 1000);
@@ -1470,6 +1694,10 @@ function loop() {
     if (t - lastEatCheckMs > 66) {
         lastEatCheckMs = t;
         checkEatCollisions();
+    }
+    // Spawn ambient particles periodically
+    if (!gameEl?.classList.contains('hidden')) {
+        spawnAmbientParticles();
     }
     render();
     requestAnimationFrame(loop);
@@ -1613,6 +1841,19 @@ function initSocket(username) {
     // Projectiles + death events
     socket.on('projectiles:update', (arr) => {
         updateProjectiles(arr || []);
+    });
+    // Immediate projectile removal (when bullet hits something)
+    socket.on('projectile:removed', (id) => {
+        if (!projectileLayer)
+            return;
+        const el = document.getElementById(`proj-${id}`);
+        if (el) {
+            const pos = projectiles[id];
+            if (pos)
+                spawnRipple(Math.round(pos.x), Math.round(pos.y), 28);
+            el.remove();
+            delete projectiles[id];
+        }
     });
     socket.on('player:died', () => {
         const now = performance.now();
@@ -1773,9 +2014,6 @@ function initSocket(username) {
         const oldEl = document.getElementById(`f-${id}`);
         if (oldEl) {
             oldEl.classList.add('food--eaten');
-            // FX overlays (initialized once when DOM is ready)
-            fxVignetteEl = document.getElementById('fx-vignette');
-            fxCriticalEl = document.getElementById('fx-critical');
             setTimeout(() => removeFoodEl(id), 130);
         }
         else {
@@ -1819,6 +2057,8 @@ function startGame(username) {
     if (bubbleLayer) {
         bubbleLayer.innerHTML = '';
     }
+    // Add ambient light rays to the world
+    addLightRays();
     initSocket(username);
     // Preload collision maps; the game can start rendering immediately and checks will activate when ready
     loadCollisionMaps().catch(() => { });
@@ -1914,8 +2154,12 @@ function startGame(username) {
         if (msEl)
             msEl.textContent = String(Math.round(msEMA));
     });
-    socket.on('bubbles:init', (seeds) => {
-        createBubbleLayerFromSeeds(seeds);
+    // Disable ambient background bubbles as per request (non-distracting gameplay)
+    socket.on('bubbles:init', (_seeds) => {
+        if (bubbleLayer) {
+            bubbleLayer.innerHTML = '';
+            bubbleLayer.style.display = 'none';
+        }
     });
     // Kill feed & notifications
     socket.on('feed:kill', (payload) => { try {
@@ -1949,6 +2193,10 @@ function startGame(username) {
                 addScreenShake(25); // More intense than damage shake
                 const sharkName = data.sharkType.replace('.png', '');
                 showTopNotice(`You evolved to ${sharkName}!`, 3000);
+                // Spawn evolution burst at center of screen
+                const screenCenterX = window.innerWidth / 2;
+                const screenCenterY = window.innerHeight / 2;
+                spawnEvolutionBurst(screenCenterX, screenCenterY);
             }
             // Server-side smoke particles are emitted separately; just log
             // console.log(`${data.username} evolved to ${data.sharkType} at level ${data.level}`);
@@ -2086,6 +2334,15 @@ function main() {
     scoreFill = document.getElementById('score-fill');
     scoreText = document.getElementById('score-text');
     sharkNameEl = document.getElementById('shark-name');
+    // HP bar elements
+    hpFillEl = document.getElementById('hp-fill');
+    hpTextEl = document.getElementById('hp-text');
+    hpStatusEl = document.getElementById('hp-status');
+    // FX overlays
+    fxVignetteEl = document.getElementById('fx-vignette');
+    fxCriticalEl = document.getElementById('fx-critical');
+    fxParticlesEl = document.getElementById('fx-particles');
+    fxChromaticEl = document.getElementById('fx-chromatic');
     projectileLayer = document.getElementById('projectiles');
     deathOverlay = document.getElementById('death-overlay');
     btnRespawn = document.getElementById('btn-respawn');

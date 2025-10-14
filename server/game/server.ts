@@ -28,7 +28,7 @@ interface Player {
     };
 }
 
-interface Food { id: number; x: number; y: number; vx?: number; vy?: number; }
+interface Food { id: number; x: number; y: number; vx?: number; vy?: number; sx?: number; sy?: number; sid?: number; }
 
 interface GameState {
     players: { [key: string]: Player };
@@ -507,6 +507,83 @@ const gameState: GameState = {
 };
 let nextFoodId = 1;
 
+// --- Fish schooling configuration ---
+const SCHOOL_COUNT = 14; // number of schools across the map (slightly more to reduce empty space)
+const SCHOOL_RADIUS = 540; // larger radius so schools cover more area (less empty space)
+const SCHOOL_MARGIN = 200; // keep schools away from borders
+
+type FoodSchool = { x: number; y: number; r: number };
+const FOOD_SCHOOLS: FoodSchool[] = [];
+
+let perSchoolTarget: number[] = [];
+
+function nearestSchoolId(x: number, y: number): number {
+  let bestI = 0; let bestD2 = Infinity;
+  for (let i = 0; i < FOOD_SCHOOLS.length; i++) {
+    const s = FOOD_SCHOOLS[i]; const dx = x - s.x, dy = y - s.y; const d2 = dx*dx + dy*dy;
+    if (d2 < bestD2) { bestD2 = d2; bestI = i; }
+  }
+  return bestI;
+}
+
+function countFoodsPerSchool(): number[] {
+  const counts = new Array(Math.max(FOOD_SCHOOLS.length, SCHOOL_COUNT)).fill(0);
+  for (const f of Object.values(gameState.foods)) {
+    if (typeof (f as Food).sid === 'number') counts[(f as Food).sid as number]++;
+    else counts[nearestSchoolId((f as Food).x, (f as Food).y)]++;
+  }
+  return counts;
+}
+
+function recomputeSchoolTargets() {
+  perSchoolTarget = new Array(FOOD_SCHOOLS.length).fill(8); // baseline 8 per school
+  const desiredTotal = FOOD_TARGET_COUNT;
+  let rem = Math.max(0, desiredTotal - (8 * FOOD_SCHOOLS.length));
+  // randomly choose 'rem' schools to have 9 instead of 8
+  const order: number[] = [];
+  for (let i = 0; i < FOOD_SCHOOLS.length; i++) order.push(i);
+  for (let i = order.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [order[i], order[j]] = [order[j], order[i]]; }
+  for (let i = 0; i < order.length && rem > 0; i++, rem--) perSchoolTarget[order[i]] = 9;
+}
+
+function initFoodSchools() {
+  FOOD_SCHOOLS.length = 0;
+  const minSep = SCHOOL_RADIUS * 1.5;
+  let attempts = 0;
+  while (FOOD_SCHOOLS.length < SCHOOL_COUNT && attempts < SCHOOL_COUNT * 200) {
+    attempts++;
+    const x = rand(SCHOOL_MARGIN, MAP_SIZE - SCHOOL_MARGIN);
+    const y = rand(SCHOOL_MARGIN, MAP_SIZE - SCHOOL_MARGIN);
+    let ok = true;
+    for (const s of FOOD_SCHOOLS) {
+      const dx = x - s.x, dy = y - s.y;
+      if ((dx*dx + dy*dy) < (minSep * minSep)) { ok = false; break; }
+    }
+    if (ok) FOOD_SCHOOLS.push({ x, y, r: SCHOOL_RADIUS });
+  }
+  if (FOOD_SCHOOLS.length === 0) {
+    FOOD_SCHOOLS.push({ x: MAP_SIZE/2, y: MAP_SIZE/2, r: SCHOOL_RADIUS });
+  }
+  recomputeSchoolTargets();
+}
+
+function pickFoodSchool(): FoodSchool {
+  const counts = countFoodsPerSchool();
+  const candidates: number[] = [];
+  for (let i = 0; i < FOOD_SCHOOLS.length; i++) {
+    if (i < perSchoolTarget.length && counts[i] < perSchoolTarget[i]) candidates.push(i);
+  }
+  let idx: number;
+  if (candidates.length) {
+    idx = candidates[(Math.random() * candidates.length) | 0];
+  } else {
+    // fallback: pick the least populated
+    let min = Infinity; idx = 0;
+    for (let i = 0; i < counts.length; i++) { if (counts[i] < min) { min = counts[i]; idx = i; } }
+  }
+  return FOOD_SCHOOLS[idx];
+}
+
 function rand(min: number, max: number) { return Math.random() * (max - min) + min; }
 
 function nearestDistSq(x: number, y: number): number {
@@ -524,20 +601,40 @@ function nearestDistSq(x: number, y: number): number {
 }
 
 function spawnFoodDistributed(tries = 20): Food {
-    const m = 120; // margin from edges (slightly larger than player radius)
+    // Cluster foods inside precomputed school regions to create pockets of emptiness elsewhere
+    const m = FOOD_HALF + 20; // safe margin from edges
+    const school = FOOD_SCHOOLS.length ? pickFoodSchool() : { x: MAP_SIZE/2, y: MAP_SIZE/2, r: Math.min(MAP_SIZE/2, SCHOOL_RADIUS) } as FoodSchool;
+    const sid = nearestSchoolId(school.x, school.y);
     let best: { x: number; y: number; score: number } | null = null;
     for (let i = 0; i < tries; i++) {
-        const cx = rand(m, MAP_SIZE - m);
-        const cy = rand(m, MAP_SIZE - m);
+        const ang = Math.random() * Math.PI * 2;
+        const rad = school.r * Math.pow(Math.random(), 1.25); // slightly flatter density curve
+        let cx = school.x + Math.cos(ang) * rad;
+        let cy = school.y + Math.sin(ang) * rad;
+        // keep within map bounds
+        cx = Math.max(m, Math.min(MAP_SIZE - m, cx));
+        cy = Math.max(m, Math.min(MAP_SIZE - m, cy));
         const score = nearestDistSq(cx, cy);
         if (!best || score > best.score) best = { x: cx, y: cy, score };
     }
     const ang = Math.random() * Math.PI * 2;
     const speed = rand(8, 18); // px/s, gentle drift
-    const food: Food = { id: nextFoodId++, x: best!.x, y: best!.y, vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed };
+    const food: Food = { id: nextFoodId++, x: best!.x, y: best!.y, vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed, sx: school.x, sy: school.y, sid };
     gameState.foods[food.id] = food;
     return food;
 }
+
+function spawnFoodRandom(): Food {
+  const m = FOOD_HALF + 20;
+  const cx = rand(m, MAP_SIZE - m);
+  const cy = rand(m, MAP_SIZE - m);
+  const ang = Math.random() * Math.PI * 2;
+  const sp = rand(8, 18);
+  const food: Food = { id: nextFoodId++, x: cx, y: cy, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp };
+  gameState.foods[food.id] = food;
+  return food;
+}
+
 
 function bubbleHitsShark(p: Player, bx: number, by: number): boolean {
   const playerMask = getPlayerMask(p);
@@ -576,6 +673,41 @@ function bubbleHitsShark(p: Player, bx: number, by: number): boolean {
 
       if (ux >= 0 && uy >= 0 && ux < SHARK_MASK_SIZE && uy < SHARK_MASK_SIZE) {
         if (playerMask[uy * SHARK_MASK_SIZE + ux] !== 0) return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+// Pixel-perfect bullet-to-fish collision detection
+function bubbleHitsFish(food: Food, bx: number, by: number): boolean {
+  if (!foodMask) return false;
+
+  // Coarse prune by radius (food.x, food.y are center coordinates)
+  const dx = bx - food.x;
+  const dy = by - food.y;
+  const maxR = FOOD_HALF + 8; // slack for better edge detection
+  if ((dx * dx + dy * dy) > (maxR * maxR)) return false;
+
+  // Fish don't rotate, so just check if bullet position hits food mask
+  // Transform bullet to food-local coordinates (food center is at food.x, food.y)
+  // Food mask top-left is at (food.x - FOOD_HALF, food.y - FOOD_HALF)
+  const localX = bx - (food.x - FOOD_HALF);
+  const localY = by - (food.y - FOOD_HALF);
+
+  // Sample a 3x3 grid around the bullet position for better accuracy
+  const sampleRadius = 1.5; // pixels
+  for (let sy = -1; sy <= 1; sy++) {
+    for (let sx = -1; sx <= 1; sx++) {
+      const sampleX = localX + (sx * sampleRadius);
+      const sampleY = localY + (sy * sampleRadius);
+
+      const mx = Math.floor(sampleX);
+      const my = Math.floor(sampleY);
+
+      if (mx >= 0 && my >= 0 && mx < FOOD_SIZE && my < FOOD_SIZE) {
+        if (foodMask[my * FOOD_SIZE + mx] !== 0) return true;
       }
     }
   }
@@ -803,21 +935,31 @@ function handleDeathAndAwards(victim: Player, killerId: string, now: number) {
     }
   }
 
+
+
+
   // Cleanup damage logs for this victim
   damageByVictim.delete(victimId);
 }
 
 
 function ensureFoodPopulation() {
-
-    const deficit = FOOD_TARGET_COUNT - Object.keys(gameState.foods).length;
-    if (deficit > 0) {
-        for (let i = 0; i < deficit; i++) spawnFoodDistributed();
-    }
+  const deficit = FOOD_TARGET_COUNT - Object.keys(gameState.foods).length;
+  if (deficit > 0) {
+    for (let i = 0; i < deficit; i++) spawnFoodDistributed();
+  }
 }
 
-// Pre-seed foods
-ensureFoodPopulation();
+function ensureFoodPopulationInitial() {
+  const deficit = FOOD_TARGET_COUNT - Object.keys(gameState.foods).length;
+  if (deficit > 0) {
+    for (let i = 0; i < deficit; i++) spawnFoodRandom();
+  }
+}
+
+// Initialize fish schools and pre-seed foods
+initFoodSchools();
+ensureFoodPopulationInitial();
 
 // Track whether the state changed since last tick to avoid redundant broadcasts
 let dirty = false;
@@ -828,30 +970,89 @@ const PLAYERS_EMIT_MS = 50; // reliable ~20 Hz players updates
 
 const FOODS_EMIT_MS = 100; // emit foods at ~10 Hz to reduce bandwidth
 
-// Gentle wandering movement for fish food (server-authoritative)
+// Gentle wandering movement for fish food (server-authoritative) with mild attraction to school centers
 function updateFoods(dt: number): Array<{ id: number; x: number; y: number }> {
   const updates: Array<{ id: number; x: number; y: number }> = [];
+  const PULL = 18; // px/s^2 (increased for stronger schooling behavior)
+  const STEER = 4; // px/s^2 random steering
+  const MAXS_WANDER = 20; // px/s
+  const MAXS_FLEE = 130; // px/s (reduced to make fish easier to catch, still < shark SELF_SPEED)
+  const FLEE_RADIUS = 520; // px, begin accelerating away when shark within this distance
+  const FLEE_ACCEL = 280; // px/s^2, scaled by proximity
+  const counts = countFoodsPerSchool();
   for (const f of Object.values(gameState.foods) as Food[]) {
+    // If this food has not been assigned to a school yet (initial random spawn), assign it now
+    if (typeof f.sid !== 'number' || typeof f.sx !== 'number' || typeof f.sy !== 'number') {
+      const candidates: number[] = [];
+      for (let i = 0; i < FOOD_SCHOOLS.length; i++) {
+        if (i < perSchoolTarget.length && counts[i] < perSchoolTarget[i]) candidates.push(i);
+      }
+      let idx = 0;
+      if (candidates.length) {
+        idx = candidates[(Math.random() * candidates.length) | 0];
+      } else {
+        let min = Infinity; idx = 0;
+        for (let i = 0; i < counts.length; i++) { if (counts[i] < min) { min = counts[i]; idx = i; } }
+      }
+      f.sid = idx; f.sx = FOOD_SCHOOLS[idx].x; f.sy = FOOD_SCHOOLS[idx].y; counts[idx] = (counts[idx] || 0) + 1;
+    }
+
     if (typeof f.vx !== 'number' || typeof f.vy !== 'number') {
       const ang = Math.random() * Math.PI * 2;
       const sp = rand(8, 18);
       f.vx = Math.cos(ang) * sp;
       f.vy = Math.sin(ang) * sp;
     } else {
-      const steer = 4; // px/s^2 random steering
-      f.vx += (Math.random() - 0.5) * steer * dt;
-      f.vy += (Math.random() - 0.5) * steer * dt;
-      const max = 20; // cap speed
-      const s = Math.hypot(f.vx, f.vy) || 1;
-      if (s > max) { f.vx = f.vx / s * max; f.vy = f.vy / s * max; }
+      // random steering noise
+      f.vx += (Math.random() - 0.5) * STEER * dt;
+      f.vy += (Math.random() - 0.5) * STEER * dt;
     }
+
+    // Determine nearest shark and apply flee acceleration away from it (server-authoritative)
+    let fleeing = false;
+    let bestD2 = Infinity; let ax = 0, ay = 0;
+    for (const p of Object.values(gameState.players) as Player[]) {
+      const sf = getSharkScaleForType(p.sharkType);
+      const cx = p.x + PLAYER_RADIUS * sf;
+      const cy = p.y + PLAYER_RADIUS * sf;
+      const ddx = f.x - cx, ddy = f.y - cy;
+      const d2 = ddx*ddx + ddy*ddy;
+      if (d2 < bestD2) { bestD2 = d2; ax = ddx; ay = ddy; }
+    }
+    if (bestD2 < (FLEE_RADIUS * FLEE_RADIUS)) {
+      const dist = Math.sqrt(bestD2) || 1;
+      const kProx = Math.max(0, 1 - dist / FLEE_RADIUS); // 0 far -> 1 very close
+      const acc = FLEE_ACCEL * (0.4 + 0.6 * kProx); // gentle far, stronger when close
+      f.vx += (ax / dist) * acc * dt;
+      f.vy += (ay / dist) * acc * dt;
+      fleeing = true;
+    }
+
+    // Strong attraction towards assigned school center (fish always want to regroup)
+    {
+      const dx = (f.sx as number) - f.x;
+      const dy = (f.sy as number) - f.y;
+      const d = Math.hypot(dx, dy) || 1;
+      let k = (d > SCHOOL_RADIUS * 0.6) ? 1 : 0.4;
+      if (fleeing) k *= 0.6; // still prioritize schooling even while fleeing (fish regroup after escape)
+      f.vx += (dx / d) * PULL * k * dt;
+      f.vy += (dy / d) * PULL * k * dt;
+    }
+
+    // cap speed and integrate
+    const s = Math.hypot(f.vx || 0, f.vy || 0) || 1;
+    const MAXS = fleeing ? MAXS_FLEE : MAXS_WANDER;
+    if (s > MAXS) { f.vx = (f.vx || 0) / s * MAXS; f.vy = (f.vy || 0) / s * MAXS; }
+
     f.x += (f.vx || 0) * dt;
     f.y += (f.vy || 0) * dt;
+
     // Bounce inside map bounds (keep half-size margin)
     if (f.x < FOOD_HALF) { f.x = FOOD_HALF; if (typeof f.vx === 'number') f.vx = Math.abs(f.vx); }
     if (f.y < FOOD_HALF) { f.y = FOOD_HALF; if (typeof f.vy === 'number') f.vy = Math.abs(f.vy); }
     if (f.x > MAP_SIZE - FOOD_HALF) { f.x = MAP_SIZE - FOOD_HALF; if (typeof f.vx === 'number') f.vx = -Math.abs(f.vx); }
     if (f.y > MAP_SIZE - FOOD_HALF) { f.y = MAP_SIZE - FOOD_HALF; if (typeof f.vy === 'number') f.vy = -Math.abs(f.vy); }
+
     updates.push({ id: f.id, x: f.x, y: f.y });
   }
   return updates;
@@ -1425,6 +1626,7 @@ setInterval(() => {
                         // Delete bullet immediately (it pops on contact)
                         delete bubbles[id];
                         projDirty = true;
+                        io.emit('projectile:removed', id); // Immediate removal on client
                         dirty = true; // player state changed (shield removed)
                         hit = true;
                         break; // Exit player loop immediately - bullet is destroyed
@@ -1438,6 +1640,7 @@ setInterval(() => {
                     // DO NOT update position - delete immediately so client never sees it at collision point
                     delete bubbles[id];
                     projDirty = true;
+                    io.emit('projectile:removed', id); // Immediate removal on client
                     dirty = true; // player state changed
                     hit = true;
 
@@ -1470,6 +1673,40 @@ setInterval(() => {
                     }
                     break;
                 }
+            }
+        }
+
+        // Check fish collision if bullet hasn't hit a player yet
+        if (!hit && bubbles[id]) {
+            for (const food of Object.values(gameState.foods) as Food[]) {
+                // Check collision at multiple points along the bullet's path
+                for (let step = 0; step <= steps && !hit; step++) {
+                    const t = step / steps;
+                    const checkX = b.x + (newX - b.x) * t;
+                    const checkY = b.y + (newY - b.y) * t;
+
+                    if (bubbleHitsFish(food, checkX, checkY)) {
+                        // Delete the bullet and notify clients immediately
+                        delete bubbles[id];
+                        projDirty = true;
+                        io.emit('projectile:removed', id); // Immediate removal on client
+
+                        // Award score to the shooter and handle fish respawn
+                        const shooter = gameState.players[b.ownerId];
+                        if (shooter) {
+                            handleConsume(shooter, food);
+                        } else {
+                            // Shooter disconnected, just respawn the fish
+                            delete gameState.foods[food.id];
+                            const newFood = spawnFoodDistributed();
+                            io.emit('food:respawn', { removedId: food.id, food: newFood });
+                        }
+
+                        hit = true;
+                        break;
+                    }
+                }
+                if (hit) break;
             }
         }
 
