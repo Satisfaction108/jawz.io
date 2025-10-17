@@ -2235,14 +2235,26 @@ function startGame(username) {
             console.error('Smoke effect error:', e);
         }
     });
-    // Shark-to-shark collision damage event
+    // Shark-to-shark collision event (authoritative correction for self on collision)
     socket.on('shark:collision', (data) => {
         try {
-            // Trigger collision effects (screen shake, red vignette)
+            // Apply subtle camera/UX effects
             if (data.damage > 0) {
-                addScreenShake(Math.min(10, data.damage * 0.5)); // Moderate shake for collision
+                addScreenShake(Math.min(10, data.damage * 0.5));
                 pulseVignette();
-                // The HP decrease will be detected in the render loop and trigger the red flash
+            }
+            // If server sent corrected coordinates, snap self to them (server-authoritative collision resolution)
+            if (typeof data.x === 'number' && typeof data.y === 'number' && selfId) {
+                const me = players[selfId];
+                if (me) {
+                    me.x = data.x;
+                    me.y = data.y;
+                    // Also nudge the DOM element immediately to avoid one-frame mismatch
+                    const el = document.getElementById(`p-${selfId}`);
+                    if (el) {
+                        el.style.transform = `translate3d(${Math.round(me.x)}px, ${Math.round(me.y)}px, 0)`;
+                    }
+                }
             }
         }
         catch (e) {

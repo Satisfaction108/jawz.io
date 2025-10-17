@@ -119,6 +119,10 @@ const lastShotAt = new Map<string, number>();
 // Per-player-pair collision damage cooldown (key: "id1:id2" sorted)
 const lastCollisionDamageAt = new Map<string, number>();
 
+// Per-player-pair collision knockback cooldown to prevent infinite collision loops (key: "id1:id2" sorted)
+const lastCollisionKnockbackAt = new Map<string, number>();
+const SHARK_COLLISION_KNOCKBACK_COOLDOWN_MS = 1000; // 1 second cooldown between knockbacks (same as damage cooldown)
+
 // Keep last known username per socket (used to respawn after death removal)
 const usernames = new Map<string, string>();
 
@@ -1191,55 +1195,74 @@ io.on('connection', (socket) => {
                     }
                 }
 
-                // If movement is blocked, apply a two-sided knockback (no cooldown) and ensure separation
+                // If movement is blocked, check knockback cooldown to prevent infinite collision loops
                 if (blocked && hitOther) {
-                    const sfMe = getSharkScaleForType(me.sharkType);
-                    const sfOt = getSharkScaleForType(hitOther.sharkType);
-                    const effSizeMe = Math.round(SHARK_SIZE * sfMe);
-                    const effSizeOt = Math.round(SHARK_SIZE * sfOt);
-                    const cxMe = me.x + PLAYER_RADIUS * sfMe;
-                    const cyMe = me.y + PLAYER_RADIUS * sfMe;
-                    const cxOt = hitOther.x + PLAYER_RADIUS * sfOt;
-                    const cyOt = hitOther.y + PLAYER_RADIUS * sfOt;
-                    let dxk = cxMe - cxOt;
-                    let dyk = cyMe - cyOt;
-                    const len = Math.hypot(dxk, dyk) || 1;
-                    dxk /= len; dyk /= len;
-                    const sAvg = (sfMe + sfOt) / 2;
-                    const KB = Math.round(100 * sAvg); // increased knockback
-
-                    // Initial symmetric push
-                    let nx0 = Math.max(0, Math.min(MAP_SIZE - effSizeMe, me.x + dxk * KB));
-                    let ny0 = Math.max(0, Math.min(MAP_SIZE - effSizeMe, me.y + dyk * KB));
-                    let ox0 = Math.max(0, Math.min(MAP_SIZE - effSizeOt, hitOther.x - dxk * KB));
-                    let oy0 = Math.max(0, Math.min(MAP_SIZE - effSizeOt, hitOther.y - dyk * KB));
-
-                    // Ensure at least circle separation to avoid lingering overlap
-                    let ncx = nx0 + PLAYER_RADIUS * sfMe, ncy = ny0 + PLAYER_RADIUS * sfMe;
-                    let ocx = ox0 + PLAYER_RADIUS * sfOt, ocy = oy0 + PLAYER_RADIUS * sfOt;
-                    let sdx = ncx - ocx, sdy = ncy - ocy;
-                    let dist = Math.hypot(sdx, sdy) || 1;
-                    const target = PLAYER_RADIUS * sfMe + PLAYER_RADIUS * sfOt + 10; // increased margin
-                    if (dist < target) {
-                        const need = (target - dist) / 2 + 5; // extra padding
-                        sdx /= dist; sdy /= dist;
-                        nx0 = Math.max(0, Math.min(MAP_SIZE - effSizeMe, nx0 + sdx * need));
-                        ny0 = Math.max(0, Math.min(MAP_SIZE - effSizeMe, ny0 + sdy * need));
-                        ox0 = Math.max(0, Math.min(MAP_SIZE - effSizeOt, ox0 - sdx * need));
-                        oy0 = Math.max(0, Math.min(MAP_SIZE - effSizeOt, oy0 - sdy * need));
-                    }
-
-                    nx = nx0; ny = ny0;
-                    hitOther.x = ox0; hitOther.y = oy0;
-
-                    // Avoid speed-limit rubberband for the other player by updating their last known server pos/time
-                    lastPos.set(hitOther.id, { x: hitOther.x, y: hitOther.y });
-                    lastUpdate.set(hitOther.id, now);
-
-
-                    // Apply collision damage to both sharks (with cooldown per pair)
+                    // Shared variables for collision pair
                     const ids = [me.id, hitOther.id].sort();
                     const key = ids.join(':');
+
+                    // Check if knockback cooldown has expired for this pair
+                    const lastKnockbackAt = lastCollisionKnockbackAt.get(key) || 0;
+                    const canKnockback = (now - lastKnockbackAt) >= SHARK_COLLISION_KNOCKBACK_COOLDOWN_MS;
+
+                    // Variables to track other shark's position for collision event
+                    let ox0 = hitOther.x;
+                    let oy0 = hitOther.y;
+
+                    if (canKnockback) {
+                        // Apply knockback only if cooldown has expired
+                        const sfMe = getSharkScaleForType(me.sharkType);
+                        const sfOt = getSharkScaleForType(hitOther.sharkType);
+                        const effSizeMe = Math.round(SHARK_SIZE * sfMe);
+                        const effSizeOt = Math.round(SHARK_SIZE * sfOt);
+                        const cxMe = me.x + PLAYER_RADIUS * sfMe;
+                        const cyMe = me.y + PLAYER_RADIUS * sfMe;
+                        const cxOt = hitOther.x + PLAYER_RADIUS * sfOt;
+                        const cyOt = hitOther.y + PLAYER_RADIUS * sfOt;
+                        let dxk = cxMe - cxOt;
+                        let dyk = cyMe - cyOt;
+                        const len = Math.hypot(dxk, dyk) || 1;
+                        dxk /= len; dyk /= len;
+                        const sAvg = (sfMe + sfOt) / 2;
+                        const KB = Math.round(150 * sAvg); // increased knockback distance for better separation
+
+                        // Initial symmetric push
+                        let nx0 = Math.max(0, Math.min(MAP_SIZE - effSizeMe, me.x + dxk * KB));
+                        let ny0 = Math.max(0, Math.min(MAP_SIZE - effSizeMe, me.y + dyk * KB));
+                        ox0 = Math.max(0, Math.min(MAP_SIZE - effSizeOt, hitOther.x - dxk * KB));
+                        oy0 = Math.max(0, Math.min(MAP_SIZE - effSizeOt, hitOther.y - dyk * KB));
+
+                        // Ensure at least circle separation to avoid lingering overlap
+                        let ncx = nx0 + PLAYER_RADIUS * sfMe, ncy = ny0 + PLAYER_RADIUS * sfMe;
+                        let ocx = ox0 + PLAYER_RADIUS * sfOt, ocy = oy0 + PLAYER_RADIUS * sfOt;
+                        let sdx = ncx - ocx, sdy = ncy - ocy;
+                        let dist = Math.hypot(sdx, sdy) || 1;
+                        const target = PLAYER_RADIUS * sfMe + PLAYER_RADIUS * sfOt + 30; // larger margin for better separation
+                        if (dist < target) {
+                            const need = (target - dist) / 2 + 15; // more extra padding to prevent re-collision
+                            sdx /= dist; sdy /= dist;
+                            nx0 = Math.max(0, Math.min(MAP_SIZE - effSizeMe, nx0 + sdx * need));
+                            ny0 = Math.max(0, Math.min(MAP_SIZE - effSizeMe, ny0 + sdy * need));
+                            ox0 = Math.max(0, Math.min(MAP_SIZE - effSizeOt, ox0 - sdx * need));
+                            oy0 = Math.max(0, Math.min(MAP_SIZE - effSizeOt, oy0 - sdy * need));
+                        }
+
+                        nx = nx0; ny = ny0;
+                        hitOther.x = ox0; hitOther.y = oy0;
+
+                        // Avoid speed-limit rubberband for the other player by updating their last known server pos/time
+                        lastPos.set(hitOther.id, { x: hitOther.x, y: hitOther.y });
+                        lastUpdate.set(hitOther.id, now);
+
+                        // Set knockback cooldown for this pair
+                        lastCollisionKnockbackAt.set(key, now);
+                    } else {
+                        // Knockback is on cooldown - just prevent movement through the other shark
+                        nx = me.x;
+                        ny = me.y;
+                    }
+
+                    // Apply collision damage to both sharks (with cooldown per pair)
                     const lastDamageAt = lastCollisionDamageAt.get(key) || 0;
                     if (now - lastDamageAt >= SHARK_COLLISION_COOLDOWN_MS) {
                       me.hp = Math.max(0, (me.hp ?? 100) - SHARK_COLLISION_DAMAGE);
@@ -1250,15 +1273,19 @@ io.on('connection', (socket) => {
 
                     console.log(`Collision: ${me.username} (${me.hp}HP) <-> ${hitOther.username} (${hitOther.hp}HP)`);
 
-                    // Record damage for kill/assist tracking
-                    recordDamage(me.id, hitOther.id, SHARK_COLLISION_DAMAGE, now);
-                    recordDamage(hitOther.id, me.id, SHARK_COLLISION_DAMAGE, now);
+                    // Record damage for kill/assist tracking (only if damage was actually applied)
+                    if (now - lastDamageAt >= SHARK_COLLISION_COOLDOWN_MS) {
+                        recordDamage(me.id, hitOther.id, SHARK_COLLISION_DAMAGE, now);
+                        recordDamage(hitOther.id, me.id, SHARK_COLLISION_DAMAGE, now);
+                    }
 
-                    // Emit collision event to both players for visual effects
-                    const meSock = io.sockets.sockets.get(me.id);
-                    const otherSock = io.sockets.sockets.get(hitOther.id);
-                    if (meSock) meSock.emit('shark:collision', { damage: SHARK_COLLISION_DAMAGE, x: nx, y: ny });
-                    if (otherSock) otherSock.emit('shark:collision', { damage: SHARK_COLLISION_DAMAGE, x: ox0, y: oy0 });
+                    // Emit collision event to both players for visual effects (only on knockback)
+                    if (canKnockback) {
+                        const meSock = io.sockets.sockets.get(me.id);
+                        const otherSock = io.sockets.sockets.get(hitOther.id);
+                        if (meSock) meSock.emit('shark:collision', { damage: SHARK_COLLISION_DAMAGE, x: nx, y: ny });
+                        if (otherSock) otherSock.emit('shark:collision', { damage: SHARK_COLLISION_DAMAGE, x: ox0, y: oy0 });
+                    }
 
                     dirty = true; // HP changed, need to broadcast
 
@@ -1731,7 +1758,8 @@ setInterval(() => {
     const foodUpdates = updateFoods(dt);
     foodsEmitAccum += TICK_MS;
     if (foodsEmitAccum >= FOODS_EMIT_MS && foodUpdates.length) {
-      io.volatile.compress(false).emit('foods:update', foodUpdates);
+      // FIX: Use reliable (non-volatile) emit to prevent food freezing during high socket traffic (shooting + moving)
+      io.emit('foods:update', foodUpdates);
       foodsEmitAccum = 0;
     }
 
