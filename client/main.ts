@@ -383,10 +383,10 @@ function spawnTrailBubbleAt(x: number, y: number, angle: number, sharkType?: str
 
   const key = sharkType || 'Baby Shark.png';
   const s = sharkScales.get(key) || 1;
-  
+
   // Fixed size scaling: bubble size scales proportionally with shark size
   const bubbleSize = s; // Direct proportional scaling with shark evolution
-  
+
   // World-space tail position: center minus facing direction vector
   const cx = x + SHARK_HALF * s;
   const cy = y + SHARK_HALF * s;
@@ -1269,17 +1269,12 @@ function updateCameraToSelf() {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
 
-  // Calculate desired camera position (centered on shark, respecting scale)
-  // Use the currently DISPLAYED shark type during evolution hold to keep centering correct
-  let keySelf = self.sharkType || 'Baby Shark.png';
-  const holdSelf = evolutionHoldUntil.get(self.id || selfId!) || 0;
-  if (performance.now() < holdSelf) {
-    const prev = evolutionPrevSharkType.get(self.id || selfId!);
-    if (prev) keySelf = prev;
-  }
-  const sSelf = sharkScales.get(keySelf) || 1;
-  let cx = (vw / 2) - (self.x + SHARK_HALF * sSelf) * z;
-  let cy = (vh / 2) - (self.y + SHARK_HALF * sSelf) * z;
+  // Calculate desired camera position (centered on shark)
+  // The shark's position (self.x, self.y) is the top-left corner in world coordinates
+  // The center is at (self.x + SHARK_HALF, self.y + SHARK_HALF) regardless of visual scale
+  // Visual scale is applied via CSS transform and doesn't affect world coordinates
+  let cx = (vw / 2) - (self.x + SHARK_HALF) * z;
+  let cy = (vh / 2) - (self.y + SHARK_HALF) * z;
 
   // Apply camera limits to prevent showing borders
   // The world is MAP_SIZE x MAP_SIZE, scaled by CAMERA_ZOOM
@@ -1295,13 +1290,12 @@ function updateCameraToSelf() {
   const minY = vh - worldHeight;  // Most negative (top) the camera can go
   const maxY = 0;                 // Most positive (bottom) the camera can go
 
-  // Only apply limits if the world is larger than the viewport
+  // Only apply horizontal limits to prevent showing left/right borders
+  // Allow vertical camera movement beyond world boundaries for top/bottom views
   if (worldWidth > vw) {
     cx = Math.max(minX, Math.min(maxX, cx));
   }
-  if (worldHeight > vh) {
-    cy = Math.max(minY, Math.min(maxY, cy));
-  }
+  // Removed vertical clamping - players can see beyond top/bottom world boundaries
 
   camera.x = cx;
   camera.y = cy;
@@ -1314,7 +1308,8 @@ function applyCameraTransform() {
   const sx = shakeMag ? (Math.random() * 2 - 1) * shakeMag : 0;
   const sy = shakeMag ? (Math.random() * 2 - 1) * shakeMag : 0;
   shakeMag *= 0.90;
-  world.style.transform = `translate3d(${(camera.x + sx)}px, ${(camera.y + sy)}px, 0) scale(${CAMERA_ZOOM})`;
+  // Round camera position to avoid sub-pixel rendering glitches
+  world.style.transform = `translate3d(${Math.round(camera.x + sx)}px, ${Math.round(camera.y + sy)}px, 0) scale(${CAMERA_ZOOM})`;
 }
 
 function ensureSharkEl(id: string, username: string) {
@@ -1436,7 +1431,8 @@ function render() {
     // Position and scale container (name/HP remain upright since rotation is on image only)
     const keyType = p.sharkType || 'Baby Shark.png';
     const s = sharkScales.get(keyType) || 1;
-    el.style.transform = `translate3d(${(p.x)}px, ${(p.y)}px, 0) scale(${s})`;
+    // Round positions to avoid sub-pixel rendering glitches
+    el.style.transform = `translate3d(${Math.round(p.x)}px, ${Math.round(p.y)}px, 0) scale(${s})`;
     if (s >= 1.32) el.classList.add('shark--apex'); else el.classList.remove('shark--apex');
     // Rotate/mirror only the shark image so the label remains upright and unflipped
     const a = p.angle;
@@ -1804,6 +1800,437 @@ function addLightRays() {
   }
 }
 
+// Add environmental elements to make the ocean more realistic
+function addEnvironmentalElements() {
+  if (!world) return;
+
+  // Remove existing environmental elements
+  const existingElements = world.querySelectorAll('.seaweed, .coral, .rock, .sand-particle, .bio-light, .floating-log, .lily-pad, .surface-ripple, .bird, .dock, .ocean-floor-bedrock');
+  existingElements.forEach(el => el.remove());
+
+  // Add solid ocean floor bedrock to prevent seeing past the ocean floor
+  const bedrock = document.createElement('div');
+  bedrock.className = 'ocean-floor-bedrock';
+  world.appendChild(bedrock);
+  // Sand canvas to render realistic sand and the terrain contour
+  const sandCanvas = document.createElement('canvas');
+  sandCanvas.className = 'ocean-sand-canvas';
+  world.appendChild(sandCanvas);
+
+  type GroundObject = { percent: number; approxWidth: number };
+  const groundObjects: GroundObject[] = [];
+
+  // Compute ground Y (from top of canvas) for a given x
+  const groundYAt = (x: number, width: number, height: number): number => {
+    const p = (x / Math.max(1, width)) * 100;
+    const h = getTerrainHeight(p);
+    return height - h;
+  };
+
+  const renderSandCanvas = (canvas: HTMLCanvasElement, objects: GroundObject[]) => {
+    // Use MAP_SIZE for canvas width (world coordinates, not transformed screen coordinates)
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const cw = MAP_SIZE; // Use actual world width
+    const ch = 450;
+    if (canvas.width !== cw * dpr || canvas.height !== ch * dpr) {
+      canvas.width = cw * dpr;
+      canvas.height = ch * dpr;
+    }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cw, ch);
+
+    // Build ground path (contour)
+    const path = new Path2D();
+    const step = 4; // px step across width
+    path.moveTo(0, groundYAt(0, cw, ch));
+    for (let x = step; x <= cw; x += step) {
+      path.lineTo(x, groundYAt(x, cw, ch));
+    }
+    path.lineTo(cw, ch);
+    path.lineTo(0, ch);
+    path.closePath();
+
+    // Sand base fill (vertical gradient)
+    const grad = ctx.createLinearGradient(0, 0, 0, ch);
+    grad.addColorStop(0.0, 'rgba(0, 110, 140, 0.00)'); // blend to water
+    grad.addColorStop(0.35, 'rgba(120, 105, 95, 0.35)');
+    grad.addColorStop(0.6, 'rgba(135, 120, 100, 0.55)');
+    grad.addColorStop(0.8, 'rgba(150, 130, 110, 0.85)');
+    grad.addColorStop(1.0, 'rgba(140, 120, 100, 1.0)');
+    ctx.fillStyle = grad;
+    ctx.fill(path);
+
+    // Subtle ripples parallel to ground: draw a few offset strokes below contour
+    ctx.save();
+    ctx.globalAlpha = 0.15;
+    ctx.strokeStyle = 'rgba(160,145,125,0.6)';
+    for (let o = 12; o <= 90; o += 18) {
+      const ripple = new Path2D();
+      ripple.moveTo(0, Math.min(ch - 1, groundYAt(0, cw, ch) + o));
+      for (let x = step; x <= cw; x += step) {
+        const base = groundYAt(x, cw, ch) + o + Math.sin((x + o * 3) * 0.01) * 1.5;
+        ripple.lineTo(x, Math.min(ch - 1, base));
+      }
+      ctx.lineWidth = 1.5;
+      ctx.stroke(ripple);
+    }
+    ctx.restore();
+
+    // Grain: sparse dots for sand texture
+    const dots = Math.floor((cw * ch) / 8000);
+    for (let i = 0; i < dots; i++) {
+      const x = Math.random() * cw;
+      const gy = groundYAt(x, cw, ch);
+      const y = gy + Math.random() * (ch - gy);
+      ctx.fillStyle = Math.random() < 0.6 ? 'rgba(120,105,90,0.25)' : 'rgba(95,80,65,0.2)';
+      ctx.fillRect(x, y, 1, 1);
+    }
+
+    // Contour line (slightly darker to avoid floating look)
+    ctx.save();
+    ctx.strokeStyle = 'rgba(90,75,60,0.5)';
+    ctx.lineWidth = 2.5;
+    const contour = new Path2D();
+    contour.moveTo(0, groundYAt(0, cw, ch));
+    for (let x = step; x <= cw; x += step) contour.lineTo(x, groundYAt(x, cw, ch));
+    ctx.stroke(contour);
+    ctx.restore();
+
+    // Contact shadows beneath objects
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    for (const obj of objects) {
+      const x = (obj.percent / 100) * cw;
+      const y = groundYAt(x, cw, ch) - 1;
+      const w = Math.max(10, obj.approxWidth * 0.6);
+      const h = Math.max(6, Math.min(14, obj.approxWidth * 0.18));
+      const g = ctx.createRadialGradient(x, y, 0, x, y, w * 0.6);
+      g.addColorStop(0, 'rgba(0,0,0,0.35)');
+      g.addColorStop(1, 'rgba(0,0,0,0.0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.ellipse(x, y, w / 2, h / 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  };
+
+  // Redraw on resize (debounced)
+  let sandRaf = 0;
+  const queueRedraw = () => {
+    if (sandRaf) cancelAnimationFrame(sandRaf);
+    sandRaf = requestAnimationFrame(() => renderSandCanvas(sandCanvas, groundObjects));
+  };
+  window.addEventListener('resize', queueRedraw);
+
+
+  // === OCEAN FLOOR ELEMENTS (ENHANCED WITH OVERLAP PREVENTION) ===
+
+  // Helper function to check if a position overlaps with existing positions
+  const checkOverlap = (newPos: number, existingPositions: number[], minDistance: number): boolean => {
+    return existingPositions.some(pos => Math.abs(newPos - pos) < minDistance);
+  };
+
+  // Helper function to find a non-overlapping position
+  const findNonOverlappingPosition = (existingPositions: number[], minDistance: number, maxAttempts: number = 50): number => {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const newPos = Math.random() * 100;
+      if (!checkOverlap(newPos, existingPositions, minDistance)) {
+        return newPos;
+      }
+    }
+    // If we can't find a non-overlapping position, return a random one
+    return Math.random() * 100;
+  };
+
+  // Helper function to calculate terrain height at a given horizontal position
+  const getTerrainHeight = (horizontalPercent: number): number => {
+    // Simulate the terrain variations from the CSS gradients
+    // Hills and elevated areas (higher = closer to surface)
+    let height = 0;
+
+    // Hill at 8% position
+    if (horizontalPercent >= 5 && horizontalPercent <= 15) {
+      const hillCenter = 8;
+      const distance = Math.abs(horizontalPercent - hillCenter);
+      height += Math.max(0, 40 - (distance * 4)); // Peak of 40px
+    }
+
+    // Hill at 25% position
+    if (horizontalPercent >= 20 && horizontalPercent <= 35) {
+      const hillCenter = 25;
+      const distance = Math.abs(horizontalPercent - hillCenter);
+      height += Math.max(0, 30 - (distance * 3)); // Peak of 30px
+    }
+
+    // Hill at 45% position
+    if (horizontalPercent >= 40 && horizontalPercent <= 55) {
+      const hillCenter = 45;
+      const distance = Math.abs(horizontalPercent - hillCenter);
+      height += Math.max(0, 35 - (distance * 3.5)); // Peak of 35px
+    }
+
+    // Hill at 68% position
+    if (horizontalPercent >= 60 && horizontalPercent <= 75) {
+      const hillCenter = 68;
+      const distance = Math.abs(horizontalPercent - hillCenter);
+      height += Math.max(0, 45 - (distance * 4)); // Peak of 45px
+    }
+
+    // Hill at 85% position
+    if (horizontalPercent >= 80 && horizontalPercent <= 95) {
+      const hillCenter = 85;
+      const distance = Math.abs(horizontalPercent - hillCenter);
+      height += Math.max(0, 38 - (distance * 3.8)); // Peak of 38px
+    }
+
+    // Valleys (negative height = deeper)
+    // Valley at 18% position
+    if (horizontalPercent >= 15 && horizontalPercent <= 25) {
+      const valleyCenter = 18;
+      const distance = Math.abs(horizontalPercent - valleyCenter);
+      height -= Math.max(0, 20 - (distance * 4)); // Depth of -20px
+    }
+
+    // Valley at 58% position
+    if (horizontalPercent >= 50 && horizontalPercent <= 65) {
+      const valleyCenter = 58;
+      const distance = Math.abs(horizontalPercent - valleyCenter);
+      height -= Math.max(0, 25 - (distance * 3.5)); // Depth of -25px
+    }
+
+    return height;
+  };
+
+  // Track positions for overlap prevention
+  const seaweedPositions: number[] = [];
+  const coralPositions: number[] = [];
+  const rockPositions: number[] = [];
+
+  // Add seaweed along the bottom (increased count: 2-3x more)
+  const seaweedCount = 20 + Math.floor(Math.random() * 6); // 20-25 seaweed plants
+  for (let i = 0; i < seaweedCount; i++) {
+    const seaweed = document.createElement('div');
+    const types = ['seaweed--tall', 'seaweed--medium', 'seaweed--short'];
+    const type = types[Math.floor(Math.random() * types.length)];
+    seaweed.className = `seaweed ${type}`;
+
+    // Find position with minimal overlap (3% minimum distance)
+    const position = findNonOverlappingPosition(seaweedPositions, 3);
+    seaweedPositions.push(position);
+    seaweed.style.left = `${position}%`;
+
+    // Position seaweed at terrain height
+    const terrainHeight = getTerrainHeight(position);
+    seaweed.style.bottom = `${terrainHeight}px`;
+
+    // Track for contact shadow
+    const approxWidth = type === 'seaweed--tall' ? 100 : type === 'seaweed--medium' ? 75 : 50;
+    groundObjects.push({ percent: position, approxWidth });
+
+    world.appendChild(seaweed);
+  }
+
+  // Add coral formations (increased count: 2-3x more)
+  const coralCount = 15 + Math.floor(Math.random() * 6); // 15-20 coral pieces
+  for (let i = 0; i < coralCount; i++) {
+    const coral = document.createElement('div');
+    const types = ['coral--brain', 'coral--fan', 'coral--tube'];
+    const type = types[Math.floor(Math.random() * types.length)];
+    coral.className = `coral ${type}`;
+
+    // Find position with minimal overlap (4% minimum distance for coral)
+    const position = findNonOverlappingPosition([...seaweedPositions, ...coralPositions], 4);
+    coralPositions.push(position);
+    coral.style.left = `${position}%`;
+
+    // Position coral at terrain height
+    const terrainHeight = getTerrainHeight(position);
+    coral.style.bottom = `${terrainHeight}px`;
+
+    // Track for contact shadow
+    const approxWidth = type === 'coral--brain' ? 78 : type === 'coral--fan' ? 65 : 52;
+    groundObjects.push({ percent: position, approxWidth });
+
+    world.appendChild(coral);
+  }
+
+  // Add rocks scattered on the ocean floor (increased count: 2-3x more)
+  const rockCount = 20 + Math.floor(Math.random() * 6); // 20-25 rocks
+  for (let i = 0; i < rockCount; i++) {
+    const rock = document.createElement('div');
+    const types = ['rock--large', 'rock--medium', 'rock--small'];
+    const type = types[Math.floor(Math.random() * types.length)];
+    rock.className = `rock ${type}`;
+
+    // Find position with minimal overlap (3.5% minimum distance for rocks)
+    const position = findNonOverlappingPosition([...seaweedPositions, ...coralPositions, ...rockPositions], 3.5);
+    rockPositions.push(position);
+    rock.style.left = `${position}%`;
+
+    // Position rock at terrain height
+    const terrainHeight = getTerrainHeight(position);
+    rock.style.bottom = `${terrainHeight}px`;
+
+    // Track for contact shadow
+    const approxWidth = type === 'rock--large' ? 72 : type === 'rock--medium' ? 48 : 32;
+    groundObjects.push({ percent: position, approxWidth });
+
+    world.appendChild(rock);
+  }
+
+  // Add shells scattered on ocean floor (30-40 shells)
+  const shellCount = 30 + Math.floor(Math.random() * 11); // 30-40 shells
+  for (let i = 0; i < shellCount; i++) {
+    const shell = document.createElement('div');
+    const types = ['shell--small', 'shell--medium', 'shell--large'];
+    const type = types[Math.floor(Math.random() * types.length)];
+    shell.className = `shell ${type}`;
+
+    // Find position with minimal overlap (2% minimum distance for shells)
+    const position = findNonOverlappingPosition([...seaweedPositions, ...coralPositions, ...rockPositions], 2);
+    shell.style.left = `${position}%`;
+
+    // Position shell at terrain height
+    const terrainHeight = getTerrainHeight(position);
+    shell.style.bottom = `${terrainHeight}px`;
+
+    // Track for contact shadow
+    const approxWidth = type === 'shell--large' ? 40 : type === 'shell--medium' ? 30 : 20;
+    groundObjects.push({ percent: position, approxWidth });
+
+    world.appendChild(shell);
+  }
+
+  // Add starfish on ocean floor (15-20 starfish)
+  const starfishCount = 15 + Math.floor(Math.random() * 6); // 15-20 starfish
+  for (let i = 0; i < starfishCount; i++) {
+    const starfish = document.createElement('div');
+    const types = ['starfish--small', 'starfish--medium'];
+    const type = types[Math.floor(Math.random() * types.length)];
+    starfish.className = `starfish ${type}`;
+
+    // Find position with minimal overlap (2.5% minimum distance)
+    const position = findNonOverlappingPosition([...seaweedPositions, ...coralPositions, ...rockPositions], 2.5);
+    starfish.style.left = `${position}%`;
+
+    // Position starfish at terrain height
+    const terrainHeight = getTerrainHeight(position);
+    starfish.style.bottom = `${terrainHeight}px`;
+
+    // Track for contact shadow
+    const approxWidth = type === 'starfish--medium' ? 35 : 25;
+    groundObjects.push({ percent: position, approxWidth });
+
+    world.appendChild(starfish);
+  }
+
+  // Add sea urchins on ocean floor (10-15 urchins)
+  const urchinCount = 10 + Math.floor(Math.random() * 6); // 10-15 urchins
+  for (let i = 0; i < urchinCount; i++) {
+    const urchin = document.createElement('div');
+    const types = ['urchin--small', 'urchin--medium'];
+    const type = types[Math.floor(Math.random() * types.length)];
+    urchin.className = `urchin ${type}`;
+
+    // Find position with minimal overlap (2.5% minimum distance)
+    const position = findNonOverlappingPosition([...seaweedPositions, ...coralPositions, ...rockPositions], 2.5);
+    urchin.style.left = `${position}%`;
+
+    // Position urchin at terrain height
+    const terrainHeight = getTerrainHeight(position);
+    urchin.style.bottom = `${terrainHeight}px`;
+
+    // Track for contact shadow
+    const approxWidth = type === 'urchin--medium' ? 26 : 18;
+    groundObjects.push({ percent: position, approxWidth });
+
+    world.appendChild(urchin);
+  }
+
+  // Add sea anemones on ocean floor (8-12 anemones)
+  const anemoneCount = 8 + Math.floor(Math.random() * 5); // 8-12 anemones
+  for (let i = 0; i < anemoneCount; i++) {
+    const anemone = document.createElement('div');
+    const types = ['anemone--small', 'anemone--medium'];
+    const type = types[Math.floor(Math.random() * types.length)];
+    anemone.className = `anemone ${type}`;
+
+    // Find position with minimal overlap (3% minimum distance)
+    const position = findNonOverlappingPosition([...seaweedPositions, ...coralPositions, ...rockPositions], 3);
+    anemone.style.left = `${position}%`;
+
+    // Position anemone at terrain height
+    const terrainHeight = getTerrainHeight(position);
+    anemone.style.bottom = `${terrainHeight}px`;
+
+    // Track for contact shadow
+    const approxWidth = type === 'anemone--medium' ? 32 : 22;
+    groundObjects.push({ percent: position, approxWidth });
+
+    world.appendChild(anemone);
+  }
+
+  // Add pebbles scattered on ocean floor (50-70 pebbles)
+  const pebbleCount = 50 + Math.floor(Math.random() * 21); // 50-70 pebbles
+  for (let i = 0; i < pebbleCount; i++) {
+    const pebble = document.createElement('div');
+    const types = ['pebble--tiny', 'pebble--small', 'pebble--medium'];
+    const type = types[Math.floor(Math.random() * types.length)];
+    pebble.className = `pebble ${type}`;
+
+    // Find position with minimal overlap (1.5% minimum distance for small pebbles)
+    const position = findNonOverlappingPosition([...seaweedPositions, ...coralPositions, ...rockPositions], 1.5);
+    pebble.style.left = `${position}%`;
+
+    // Position pebble at terrain height
+    const terrainHeight = getTerrainHeight(position);
+    pebble.style.bottom = `${terrainHeight}px`;
+
+    // Track for contact shadow
+    const approxWidth = type === 'pebble--medium' ? 18 : type === 'pebble--small' ? 12 : 8;
+    groundObjects.push({ percent: position, approxWidth });
+
+    world.appendChild(pebble);
+  }
+
+  // Render sand and contact shadows after placing ground objects
+  renderSandCanvas(sandCanvas, groundObjects);
+
+  // === SURFACE ELEMENTS (OPTIMIZED) ===
+
+  // Add floating logs and debris (reduced count)
+  const logCount = 3 + Math.floor(Math.random() * 2); // 3-5 floating logs
+  for (let i = 0; i < logCount; i++) {
+    const log = document.createElement('div');
+    const types = ['floating-log--medium', 'floating-log--small'];
+    const type = types[Math.floor(Math.random() * types.length)];
+    log.className = `floating-log ${type}`;
+    log.style.left = `${Math.random() * 100}%`;
+    world.appendChild(log);
+  }
+
+  // Add lily pads (reduced count)
+  const lilyCount = 4 + Math.floor(Math.random() * 3); // 4-7 lily pads
+  for (let i = 0; i < lilyCount; i++) {
+    const lily = document.createElement('div');
+    lily.className = 'lily-pad';
+    lily.style.left = `${Math.random() * 100}%`;
+    world.appendChild(lily);
+  }
+
+  // Add dock structures (reduced count)
+  const dockCount = 1 + Math.floor(Math.random() * 1); // 1-2 docks
+  for (let i = 0; i < dockCount; i++) {
+    const dock = document.createElement('div');
+    dock.className = 'dock';
+    dock.style.left = `${20 + (i * 50)}%`;
+    world.appendChild(dock);
+  }
+}
+
 // Ambient particle spawning (throttled) - OPTIMIZED: reduced frequency and count
 let lastAmbientSpawn = 0;
 function spawnAmbientParticles() {
@@ -2166,6 +2593,9 @@ function startGame(username: string) {
 
   // Add ambient light rays to the world
   addLightRays();
+
+  // Add environmental elements (seaweed, coral, rocks)
+  addEnvironmentalElements();
 
   initSocket(username);
   // Preload collision maps; the game can start rendering immediately and checks will activate when ready
