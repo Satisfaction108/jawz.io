@@ -197,7 +197,7 @@
       rgba(110, 90, 65, 1.0) 97%,
       rgba(95, 75, 55, 1.0) 100%);
   pointer-events: none;
-  z-index: -3;
+  z-index: -2;
 }
 
 /* Solid Ocean Floor Bedrock - prevents seeing past the ocean floor */
@@ -213,19 +213,7 @@
     rgba(65, 45, 30, 1.0) 60%,
     rgba(50, 35, 25, 1.0) 100%);
   pointer-events: none;
-  z-index: -4;
-}
-
-/* Sand canvas sits above terrain textures and bedrock */
-.ocean-sand-canvas {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  width: 4000px; /* Match MAP_SIZE for proper world-space rendering */
-  height: 450px;
-  pointer-events: none;
   z-index: -3;
-  image-rendering: auto; /* Smooth rendering for sand particles */
 }
 
 /* Enhanced Surface Area with Detailed Environment */
@@ -379,71 +367,49 @@
   border-radius: 50% 50% 30% 30%;
 }
 
-/* Starfish - ocean floor creatures (more realistic shading/texture) */
+/* Starfish - ocean floor creatures */
 .starfish {
   position: absolute;
   bottom: 0;
   pointer-events: none;
   z-index: -2;
   clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
-  filter: drop-shadow(0 1px 0 rgba(0,0,0,0.1));
 }
 
-/* Body shading + arm gradients + speckles */
-.starfish--small,
+.starfish--small {
+  width: 25px;
+  height: 25px;
+  background: linear-gradient(135deg, rgba(220, 100, 80, 0.7) 0%, rgba(200, 80, 60, 0.6) 100%);
+}
+
 .starfish--medium {
-  background-image:
-    radial-gradient(circle at 50% 55%, rgba(255, 180, 150, 0.35) 0%, rgba(255, 180, 150, 0.0) 60%),
-    conic-gradient(from 0deg, rgba(220,100,80,0.85) 0 20%, rgba(210,90,70,0.85) 20% 40%, rgba(220,100,80,0.85) 40% 60%, rgba(210,90,70,0.85) 60% 80%, rgba(220,100,80,0.85) 80% 100%),
-    radial-gradient(circle at 50% 50%, rgba(200, 90, 70, 0.9) 0%, rgba(190, 85, 65, 0.85) 65%, rgba(180, 80, 60, 0.8) 100%);
-  background-blend-mode: overlay, normal, normal;
+  width: 35px;
+  height: 35px;
+  background: linear-gradient(135deg, rgba(230, 110, 90, 0.75) 0%, rgba(210, 90, 70, 0.65) 100%);
 }
 
-.starfish--small { width: 25px; height: 25px; }
-.starfish--medium { width: 35px; height: 35px; }
-
-.starfish::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    radial-gradient(circle at 30% 35%, rgba(255, 210, 190, 0.4) 0%, rgba(255, 210, 190, 0) 60%),
-    radial-gradient(circle at 70% 60%, rgba(255, 210, 190, 0.35) 0%, rgba(255, 210, 190, 0) 60%),
-    radial-gradient(circle at 50% 50%, rgba(255, 230, 220, 0.3) 0%, rgba(255, 230, 220, 0) 70%);
-}
-
-/* Sea Urchin - spiky creatures (more realistic with radial spikes) */
+/* Sea Urchin - spiky creatures */
 .urchin {
   position: absolute;
   bottom: 0;
   pointer-events: none;
   z-index: -2;
   border-radius: 50%;
-  filter: drop-shadow(0 1px 0 rgba(0,0,0,0.15));
 }
 
-.urchin--small,
+.urchin--small {
+  width: 18px;
+  height: 18px;
+  background: radial-gradient(circle, rgba(80, 40, 20, 0.8) 0%, rgba(60, 30, 10, 0.7) 100%);
+  box-shadow: inset -2px -2px 3px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(100, 50, 30, 0.6);
+}
+
 .urchin--medium {
-  background-image:
-    radial-gradient(circle at 50% 50%, rgba(120,70,40,0.9) 0%, rgba(80,45,25,0.85) 60%, rgba(60,35,20,0.8) 100%);
-  position: relative;
+  width: 26px;
+  height: 26px;
+  background: radial-gradient(circle, rgba(90, 50, 30, 0.85) 0%, rgba(70, 40, 20, 0.75) 100%);
+  box-shadow: inset -3px -3px 4px rgba(0, 0, 0, 0.6), 0 0 0 3px rgba(110, 60, 40, 0.7);
 }
-
-/* Spikes using a conic pattern masked to circle */
-.urchin::before {
-  content: "";
-  position: absolute;
-  inset: -4px;
-  background:
-    repeating-conic-gradient(rgba(50,30,20,0.0) 0deg 6deg, rgba(50,30,20,0.5) 6deg 8deg);
-  -webkit-mask: radial-gradient(circle at 50% 50%, black 58%, transparent 60%);
-  mask: radial-gradient(circle at 50% 50%, black 58%, transparent 60%);
-  pointer-events: none;
-}
-
-.urchin--small { width: 18px; height: 18px; }
-.urchin--medium { width: 26px; height: 26px; }
 
 /* Sea Anemone - waving tentacles */
 .anemone {
