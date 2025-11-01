@@ -113,6 +113,8 @@
   background: linear-gradient(180deg, rgba(20,90,120,.38), rgba(15,75,110,.36) 38%, rgba(8,50,90,.32) 72%, rgba(3,25,50,.30));
   will-change: transform;
   overflow: hidden;
+  /* Performance optimization: contain layout and paint */
+  contain: layout style paint;
   /* Futuristic neon border with corner accents */
   outline: 2px solid rgba(0,255,255,0.35);
   outline-offset: -2px;
@@ -180,21 +182,60 @@
     radial-gradient(circle at 20% 88%, rgba(80, 65, 50, 0.4) 0%, transparent 20%),
     radial-gradient(circle at 60% 90%, rgba(75, 60, 45, 0.35) 0%, transparent 18%),
 
-    /* Base terrain foundation - smooth transition from water to ocean floor */
+    /* Base terrain foundation - ultra-smooth gradual transition from water to ocean floor */
     linear-gradient(180deg,
       transparent 0%,
-      rgba(0, 100, 120, 0.05) 8%,
-      rgba(15, 105, 125, 0.08) 15%,
-      rgba(30, 115, 135, 0.12) 25%,
-      rgba(50, 125, 145, 0.18) 35%,
-      rgba(70, 125, 140, 0.25) 45%,
-      rgba(90, 120, 130, 0.35) 55%,
-      rgba(105, 110, 120, 0.5) 65%,
-      rgba(115, 100, 110, 0.65) 72%,
-      rgba(120, 95, 85, 0.8) 80%,
-      rgba(125, 100, 80, 0.9) 88%,
-      rgba(120, 100, 75, 1.0) 94%,
-      rgba(110, 90, 65, 1.0) 97%,
+      rgba(0, 98, 118, 0.02) 2%,
+      rgba(0, 100, 120, 0.03) 4%,
+      rgba(2, 101, 121, 0.04) 6%,
+      rgba(4, 102, 122, 0.05) 8%,
+      rgba(6, 103, 123, 0.06) 10%,
+      rgba(8, 104, 124, 0.07) 12%,
+      rgba(10, 105, 125, 0.08) 14%,
+      rgba(13, 106, 126, 0.09) 16%,
+      rgba(16, 107, 127, 0.10) 18%,
+      rgba(19, 108, 128, 0.11) 20%,
+      rgba(22, 110, 130, 0.12) 22%,
+      rgba(25, 112, 132, 0.13) 24%,
+      rgba(28, 114, 134, 0.14) 26%,
+      rgba(31, 116, 136, 0.15) 28%,
+      rgba(35, 118, 138, 0.16) 30%,
+      rgba(39, 120, 140, 0.17) 32%,
+      rgba(43, 121, 141, 0.18) 34%,
+      rgba(47, 122, 142, 0.19) 36%,
+      rgba(51, 124, 144, 0.20) 38%,
+      rgba(55, 125, 145, 0.21) 40%,
+      rgba(59, 125, 144, 0.23) 42%,
+      rgba(63, 125, 143, 0.25) 44%,
+      rgba(67, 125, 142, 0.27) 46%,
+      rgba(71, 124, 141, 0.29) 48%,
+      rgba(75, 123, 140, 0.31) 50%,
+      rgba(78, 122, 138, 0.33) 52%,
+      rgba(81, 121, 136, 0.35) 54%,
+      rgba(84, 120, 134, 0.37) 56%,
+      rgba(87, 119, 132, 0.39) 58%,
+      rgba(90, 118, 130, 0.42) 60%,
+      rgba(93, 116, 128, 0.45) 62%,
+      rgba(96, 114, 126, 0.48) 64%,
+      rgba(99, 112, 124, 0.51) 66%,
+      rgba(101, 110, 121, 0.54) 68%,
+      rgba(103, 108, 118, 0.57) 70%,
+      rgba(105, 106, 115, 0.60) 72%,
+      rgba(107, 104, 112, 0.63) 74%,
+      rgba(109, 102, 109, 0.66) 76%,
+      rgba(111, 100, 106, 0.69) 78%,
+      rgba(113, 99, 102, 0.72) 80%,
+      rgba(115, 98, 98, 0.75) 82%,
+      rgba(117, 98, 94, 0.78) 84%,
+      rgba(119, 98, 90, 0.81) 86%,
+      rgba(121, 99, 86, 0.84) 88%,
+      rgba(122, 99, 82, 0.87) 90%,
+      rgba(121, 98, 79, 0.90) 92%,
+      rgba(120, 97, 76, 0.93) 94%,
+      rgba(118, 95, 73, 0.96) 96%,
+      rgba(115, 92, 69, 0.98) 98%,
+      rgba(110, 88, 65, 0.99) 99%,
+      rgba(105, 83, 60, 1.0) 99.5%,
       rgba(95, 75, 55, 1.0) 100%);
   pointer-events: none;
   z-index: -2;
@@ -214,6 +255,28 @@
     rgba(50, 35, 25, 1.0) 100%);
   pointer-events: none;
   z-index: -3;
+}
+
+/* Continuous Wavy Terrain Layer - Rolling Sand Dunes/Hills */
+.terrain-hills {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 120px;
+  pointer-events: none;
+  z-index: -2;
+  overflow: visible;
+}
+
+/* SVG-based wavy terrain with dark brown borders */
+.terrain-hills svg {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
 
 /* Enhanced Surface Area with Detailed Environment */
@@ -270,10 +333,11 @@
   background-repeat: no-repeat;
   background-position: bottom;
   pointer-events: none;
-  z-index: -2;
+  z-index: -1;
   image-rendering: pixelated;
   image-rendering: -moz-crisp-edges;
   image-rendering: crisp-edges;
+  will-change: transform;
 }
 
 .seaweed--tall {
@@ -298,10 +362,11 @@
   background-repeat: no-repeat;
   background-position: bottom;
   pointer-events: none;
-  z-index: -2;
+  z-index: -1;
   image-rendering: pixelated;
   image-rendering: -moz-crisp-edges;
   image-rendering: crisp-edges;
+  will-change: transform;
 }
 
 .coral--brain {
@@ -332,6 +397,8 @@
   image-rendering: pixelated;
   image-rendering: -moz-crisp-edges;
   image-rendering: crisp-edges;
+  will-change: transform;
+  contain: layout style paint;
 }
 
 .rock--large { width: 72px; height: 72px; }
@@ -344,6 +411,8 @@
   bottom: 0;
   pointer-events: none;
   z-index: -2;
+  will-change: transform;
+  contain: layout style paint;
 }
 
 .shell--small {
@@ -374,6 +443,8 @@
   pointer-events: none;
   z-index: -2;
   clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
+  will-change: transform;
+  contain: layout style paint;
 }
 
 .starfish--small {
@@ -395,6 +466,8 @@
   pointer-events: none;
   z-index: -2;
   border-radius: 50%;
+  will-change: transform;
+  contain: layout style paint;
 }
 
 .urchin--small {
@@ -417,6 +490,8 @@
   bottom: 0;
   pointer-events: none;
   z-index: -2;
+  will-change: transform;
+  contain: layout style paint;
 }
 
 .anemone--small {
@@ -442,6 +517,8 @@
   pointer-events: none;
   z-index: -2;
   border-radius: 50%;
+  will-change: transform;
+  contain: layout style paint;
 }
 
 .pebble--tiny {
