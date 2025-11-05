@@ -9,12 +9,11 @@
     "allowJs": false,
     "noEmit": false,
     "outDir": "client/dist",
-    "rootDir": ".",
+    "rootDir": "client",
     "resolveJsonModule": true
   },
   "include": [
-    "client/**/*.ts",
-    "lib/**/*.ts"
+    "client/**/*.ts"
   ],
   "exclude": [
     "node_modules",

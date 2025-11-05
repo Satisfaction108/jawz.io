@@ -108,28 +108,21 @@
   height: 4000px;
   transform-origin: 0 0; /* ensure camera translate/scale math uses top-left origin */
   transform: none;
-  transform-origin: 0 0;
-  /* Futuristic darker ocean background with cyan tint */
-  background: linear-gradient(180deg, rgba(20,90,120,.38), rgba(15,75,110,.36) 38%, rgba(8,50,90,.32) 72%, rgba(3,25,50,.30));
-  will-change: transform;
+  /* Realistic medium-bright ocean water background with depth */
+  background: linear-gradient(180deg,
+    rgb(55, 125, 175) 0%,      /* Medium-light blue at surface */
+    rgb(45, 110, 165) 25%,     /* Medium blue */
+    rgb(38, 95, 150) 50%,      /* Medium-deep blue */
+    rgb(30, 80, 135) 75%,      /* Deep blue */
+    rgb(25, 65, 120) 100%);    /* Deeper blue at bottom */
   overflow: hidden;
-  /* Performance optimization: contain layout and paint */
-  contain: layout style paint;
-  /* Futuristic neon border with corner accents */
-  outline: 2px solid rgba(0,255,255,0.35);
-  outline-offset: -2px;
-  /* Enhanced glow for futuristic feel */
-  box-shadow:
-    inset 0 0 40px rgba(0,255,255,0.08),
-    inset 0 0 80px rgba(0,180,255,0.04),
-    0 0 30px rgba(0,255,255,0.15);
 }
 
 /* ========================================
    ENVIRONMENTAL ELEMENTS
    ======================================== */
 
-/* Realistic Ocean Floor with Detailed Terrain */
+/* Realistic Ocean Floor with Detailed Terrain - REMOVED: All sand/rock gradients above SVG terrain */
 .world::before {
   content: "";
   position: absolute;
@@ -137,122 +130,19 @@
   left: 0;
   width: 100%;
   height: 450px;
-  background:
-    /* Sand ripples and texture patterns */
-    repeating-linear-gradient(90deg, transparent 0px, rgba(140, 120, 100, 0.15) 2px, transparent 4px, transparent 8px),
-    repeating-linear-gradient(45deg, transparent 0px, rgba(130, 110, 90, 0.1) 1px, transparent 2px, transparent 6px),
-
-    /* Sediment layers - visible stratification */
-    linear-gradient(180deg, transparent 0%, rgba(100, 85, 70, 0.08) 5%, transparent 10%),
-    linear-gradient(180deg, transparent 15%, rgba(95, 80, 65, 0.1) 18%, transparent 22%),
-    linear-gradient(180deg, transparent 35%, rgba(90, 75, 60, 0.12) 38%, transparent 42%),
-    linear-gradient(180deg, transparent 55%, rgba(85, 70, 55, 0.15) 58%, transparent 62%),
-    linear-gradient(180deg, transparent 75%, rgba(80, 65, 50, 0.18) 78%, transparent 82%),
-
-    /* Rocky outcrops and boulders */
-    radial-gradient(ellipse 120px 60px at 5% 82%, rgba(60, 55, 50, 0.8) 0%, rgba(70, 65, 60, 0.5) 40%, transparent 70%),
-    radial-gradient(ellipse 90px 50px at 12% 88%, rgba(65, 60, 55, 0.7) 0%, rgba(75, 70, 65, 0.4) 50%, transparent 75%),
-    radial-gradient(ellipse 140px 70px at 22% 85%, rgba(55, 50, 45, 0.75) 0%, rgba(65, 60, 55, 0.45) 45%, transparent 70%),
-    radial-gradient(ellipse 110px 55px at 35% 89%, rgba(70, 65, 60, 0.7) 0%, rgba(80, 75, 70, 0.4) 50%, transparent 75%),
-    radial-gradient(ellipse 130px 65px at 48% 86%, rgba(60, 55, 50, 0.75) 0%, rgba(70, 65, 60, 0.45) 45%, transparent 70%),
-    radial-gradient(ellipse 100px 50px at 62% 90%, rgba(65, 60, 55, 0.7) 0%, rgba(75, 70, 65, 0.4) 50%, transparent 75%),
-    radial-gradient(ellipse 120px 60px at 75% 84%, rgba(55, 50, 45, 0.8) 0%, rgba(65, 60, 55, 0.5) 40%, transparent 70%),
-    radial-gradient(ellipse 110px 55px at 88% 87%, rgba(70, 65, 60, 0.75) 0%, rgba(80, 75, 70, 0.45) 45%, transparent 70%),
-
-    /* Gravel and pebble patches */
-    radial-gradient(circle at 8% 92%, rgba(120, 105, 90, 0.5) 0%, transparent 15%),
-    radial-gradient(circle at 28% 94%, rgba(115, 100, 85, 0.45) 0%, transparent 12%),
-    radial-gradient(circle at 42% 93%, rgba(125, 110, 95, 0.5) 0%, transparent 14%),
-    radial-gradient(circle at 65% 95%, rgba(120, 105, 90, 0.48) 0%, transparent 13%),
-    radial-gradient(circle at 82% 92%, rgba(115, 100, 85, 0.5) 0%, transparent 15%),
-
-    /* Underwater canyons and crevices */
-    radial-gradient(ellipse 200px 80px at 15% 95%, rgba(50, 40, 30, 0.8) 0%, rgba(60, 50, 40, 0.5) 60%, transparent 85%),
-    radial-gradient(ellipse 180px 70px at 55% 97%, rgba(45, 35, 25, 0.85) 0%, rgba(55, 45, 35, 0.55) 65%, transparent 90%),
-    radial-gradient(ellipse 160px 65px at 78% 96%, rgba(50, 40, 30, 0.8) 0%, rgba(60, 50, 40, 0.5) 70%, transparent 95%),
-
-    /* Sand dunes with natural variation */
-    radial-gradient(ellipse 180px 70px at 10% 80%, rgba(145, 125, 105, 0.5) 0%, rgba(135, 115, 95, 0.3) 50%, transparent 75%),
-    radial-gradient(ellipse 160px 65px at 32% 82%, rgba(150, 130, 110, 0.45) 0%, rgba(140, 120, 100, 0.25) 55%, transparent 80%),
-    radial-gradient(ellipse 170px 68px at 52% 81%, rgba(148, 128, 108, 0.48) 0%, rgba(138, 118, 98, 0.28) 52%, transparent 78%),
-    radial-gradient(ellipse 175px 70px at 72% 83%, rgba(152, 132, 112, 0.5) 0%, rgba(142, 122, 102, 0.3) 50%, transparent 76%),
-    radial-gradient(ellipse 165px 67px at 92% 80%, rgba(146, 126, 106, 0.48) 0%, rgba(136, 116, 96, 0.28) 54%, transparent 79%),
-
-    /* Darker sediment areas */
-    radial-gradient(circle at 20% 88%, rgba(80, 65, 50, 0.4) 0%, transparent 20%),
-    radial-gradient(circle at 60% 90%, rgba(75, 60, 45, 0.35) 0%, transparent 18%),
-
-    /* Base terrain foundation - ultra-smooth gradual transition from water to ocean floor */
-    linear-gradient(180deg,
-      transparent 0%,
-      rgba(0, 98, 118, 0.02) 2%,
-      rgba(0, 100, 120, 0.03) 4%,
-      rgba(2, 101, 121, 0.04) 6%,
-      rgba(4, 102, 122, 0.05) 8%,
-      rgba(6, 103, 123, 0.06) 10%,
-      rgba(8, 104, 124, 0.07) 12%,
-      rgba(10, 105, 125, 0.08) 14%,
-      rgba(13, 106, 126, 0.09) 16%,
-      rgba(16, 107, 127, 0.10) 18%,
-      rgba(19, 108, 128, 0.11) 20%,
-      rgba(22, 110, 130, 0.12) 22%,
-      rgba(25, 112, 132, 0.13) 24%,
-      rgba(28, 114, 134, 0.14) 26%,
-      rgba(31, 116, 136, 0.15) 28%,
-      rgba(35, 118, 138, 0.16) 30%,
-      rgba(39, 120, 140, 0.17) 32%,
-      rgba(43, 121, 141, 0.18) 34%,
-      rgba(47, 122, 142, 0.19) 36%,
-      rgba(51, 124, 144, 0.20) 38%,
-      rgba(55, 125, 145, 0.21) 40%,
-      rgba(59, 125, 144, 0.23) 42%,
-      rgba(63, 125, 143, 0.25) 44%,
-      rgba(67, 125, 142, 0.27) 46%,
-      rgba(71, 124, 141, 0.29) 48%,
-      rgba(75, 123, 140, 0.31) 50%,
-      rgba(78, 122, 138, 0.33) 52%,
-      rgba(81, 121, 136, 0.35) 54%,
-      rgba(84, 120, 134, 0.37) 56%,
-      rgba(87, 119, 132, 0.39) 58%,
-      rgba(90, 118, 130, 0.42) 60%,
-      rgba(93, 116, 128, 0.45) 62%,
-      rgba(96, 114, 126, 0.48) 64%,
-      rgba(99, 112, 124, 0.51) 66%,
-      rgba(101, 110, 121, 0.54) 68%,
-      rgba(103, 108, 118, 0.57) 70%,
-      rgba(105, 106, 115, 0.60) 72%,
-      rgba(107, 104, 112, 0.63) 74%,
-      rgba(109, 102, 109, 0.66) 76%,
-      rgba(111, 100, 106, 0.69) 78%,
-      rgba(113, 99, 102, 0.72) 80%,
-      rgba(115, 98, 98, 0.75) 82%,
-      rgba(117, 98, 94, 0.78) 84%,
-      rgba(119, 98, 90, 0.81) 86%,
-      rgba(121, 99, 86, 0.84) 88%,
-      rgba(122, 99, 82, 0.87) 90%,
-      rgba(121, 98, 79, 0.90) 92%,
-      rgba(120, 97, 76, 0.93) 94%,
-      rgba(118, 95, 73, 0.96) 96%,
-      rgba(115, 92, 69, 0.98) 98%,
-      rgba(110, 88, 65, 0.99) 99%,
-      rgba(105, 83, 60, 1.0) 99.5%,
-      rgba(95, 75, 55, 1.0) 100%);
+  background: transparent;
   pointer-events: none;
   z-index: -2;
 }
 
-/* Solid Ocean Floor Bedrock - prevents seeing past the ocean floor */
+/* Solid Ocean Floor Bedrock - prevents seeing past the ocean floor - REMOVED: All sand/brown gradients */
 .ocean-floor-bedrock {
   position: absolute;
   bottom: -500px;
   left: 0;
   width: 100%;
   height: 900px;
-  background: linear-gradient(180deg,
-    rgba(95, 75, 55, 1.0) 0%,
-    rgba(80, 60, 45, 1.0) 30%,
-    rgba(65, 45, 30, 1.0) 60%,
-    rgba(50, 35, 25, 1.0) 100%);
+  background: transparent;
   pointer-events: none;
   z-index: -3;
 }
@@ -279,7 +169,7 @@
   overflow: visible;
 }
 
-/* Enhanced Surface Area with Detailed Environment */
+/* Enhanced Surface Area with Detailed Environment - REMOVED: All shore/land/beach gradients */
 .world::after {
   content: "";
   position: absolute;
@@ -287,39 +177,7 @@
   left: 0;
   width: 100%;
   height: 350px;
-  background:
-    /* Large tree canopies with layered foliage */
-    radial-gradient(ellipse 100px 180px at 8% 100%, rgba(20, 60, 20, 0.8) 0%, rgba(34, 80, 34, 0.6) 50%, transparent 80%),
-    radial-gradient(ellipse 120px 200px at 22% 100%, rgba(15, 50, 15, 0.7) 0%, rgba(28, 70, 28, 0.5) 50%, transparent 85%),
-    radial-gradient(ellipse 80px 160px at 38% 100%, rgba(25, 70, 25, 0.8) 0%, rgba(40, 85, 40, 0.6) 50%, transparent 75%),
-    radial-gradient(ellipse 110px 190px at 52% 100%, rgba(18, 55, 18, 0.7) 0%, rgba(32, 75, 32, 0.5) 50%, transparent 80%),
-    radial-gradient(ellipse 140px 220px at 68% 100%, rgba(12, 45, 12, 0.6) 0%, rgba(25, 65, 25, 0.4) 50%, transparent 85%),
-    radial-gradient(ellipse 90px 170px at 82% 100%, rgba(22, 65, 22, 0.7) 0%, rgba(38, 80, 38, 0.5) 50%, transparent 75%),
-    radial-gradient(ellipse 70px 140px at 95% 100%, rgba(28, 75, 28, 0.6) 0%, rgba(42, 90, 42, 0.4) 50%, transparent 70%),
-
-    /* Tree trunks */
-    linear-gradient(180deg, transparent 70%, rgba(101, 67, 33, 0.6) 85%, rgba(139, 69, 19, 0.7) 100%) 8% 0 / 8px 100%,
-    linear-gradient(180deg, transparent 70%, rgba(101, 67, 33, 0.6) 85%, rgba(139, 69, 19, 0.7) 100%) 22% 0 / 10px 100%,
-    linear-gradient(180deg, transparent 70%, rgba(101, 67, 33, 0.6) 85%, rgba(139, 69, 19, 0.7) 100%) 38% 0 / 7px 100%,
-    linear-gradient(180deg, transparent 70%, rgba(101, 67, 33, 0.6) 85%, rgba(139, 69, 19, 0.7) 100%) 52% 0 / 9px 100%,
-    linear-gradient(180deg, transparent 70%, rgba(101, 67, 33, 0.6) 85%, rgba(139, 69, 19, 0.7) 100%) 68% 0 / 11px 100%,
-    linear-gradient(180deg, transparent 70%, rgba(101, 67, 33, 0.6) 85%, rgba(139, 69, 19, 0.7) 100%) 82% 0 / 8px 100%,
-
-    /* Undergrowth and bushes */
-    radial-gradient(ellipse 50px 80px at 12% 100%, rgba(60, 120, 60, 0.5) 0%, transparent 70%),
-    radial-gradient(ellipse 45px 75px at 28% 100%, rgba(55, 115, 55, 0.5) 0%, transparent 65%),
-    radial-gradient(ellipse 40px 70px at 45% 100%, rgba(65, 125, 65, 0.5) 0%, transparent 70%),
-    radial-gradient(ellipse 55px 85px at 62% 100%, rgba(50, 110, 50, 0.5) 0%, transparent 75%),
-    radial-gradient(ellipse 35px 65px at 78% 100%, rgba(70, 130, 70, 0.5) 0%, transparent 65%),
-    radial-gradient(ellipse 48px 78px at 90% 100%, rgba(58, 118, 58, 0.5) 0%, transparent 70%),
-
-    /* Shore/land base with beach */
-    linear-gradient(180deg,
-      rgba(85, 107, 47, 0.5) 0%,
-      rgba(107, 142, 35, 0.4) 20%,
-      rgba(194, 178, 128, 0.3) 60%,
-      rgba(210, 190, 140, 0.2) 80%,
-      transparent 100%);
+  background: transparent;
   pointer-events: none;
   z-index: -2;
 }
@@ -369,6 +227,11 @@
   will-change: transform;
 }
 
+/* Red Coral Variant - same size as regular coral */
+.coral-red {
+  background-image: url('/props/RedCoral.png');
+}
+
 .coral--brain {
   width: 78px;
   height: 92px;
@@ -384,14 +247,12 @@
   height: 61px;
 }
 
-/* Pixel Art Rocks */
+/* Pixel Art Rocks - Using PNG images */
 .rock {
   position: absolute;
   bottom: 0;
-  background-image: url('/props/rock.png');
-  background-size: contain;
-  background-repeat: no-repeat;
-  background-position: bottom;
+  width: 64px;
+  height: 64px;
   pointer-events: none;
   z-index: -2;
   image-rendering: pixelated;
@@ -399,11 +260,8 @@
   image-rendering: crisp-edges;
   will-change: transform;
   contain: layout style paint;
+  object-fit: contain;
 }
-
-.rock--large { width: 72px; height: 72px; }
-.rock--medium { width: 48px; height: 48px; }
-.rock--small { width: 32px; height: 32px; }
 
 /* Shells - scattered on ocean floor */
 .shell {
@@ -436,52 +294,50 @@
   border-radius: 50% 50% 30% 30%;
 }
 
-/* Starfish - ocean floor creatures */
+/* Starfish - ocean floor creatures - Using PNG images */
 .starfish {
   position: absolute;
   bottom: 0;
+  width: 64px;
+  height: 64px;
   pointer-events: none;
   z-index: -2;
-  clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
   will-change: transform;
   contain: layout style paint;
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+  object-fit: contain;
 }
 
-.starfish--small {
-  width: 25px;
-  height: 25px;
-  background: linear-gradient(135deg, rgba(220, 100, 80, 0.7) 0%, rgba(200, 80, 60, 0.6) 100%);
-}
-
-.starfish--medium {
-  width: 35px;
-  height: 35px;
-  background: linear-gradient(135deg, rgba(230, 110, 90, 0.75) 0%, rgba(210, 90, 70, 0.65) 100%);
-}
-
-/* Sea Urchin - spiky creatures */
+/* Sea Urchin - spiky creatures - Using PNG images */
 .urchin {
+  position: absolute;
+  bottom: 0;
+  width: 72px;
+  height: 72px;
+  pointer-events: none;
+  z-index: -2;
+  will-change: transform;
+  contain: layout style paint;
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+  object-fit: contain;
+}
+
+/* Coral Reef - Continuous tileable strip across ocean floor */
+.coral-reef {
   position: absolute;
   bottom: 0;
   pointer-events: none;
   z-index: -2;
-  border-radius: 50%;
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+  object-fit: cover;
   will-change: transform;
   contain: layout style paint;
-}
-
-.urchin--small {
-  width: 18px;
-  height: 18px;
-  background: radial-gradient(circle, rgba(80, 40, 20, 0.8) 0%, rgba(60, 30, 10, 0.7) 100%);
-  box-shadow: inset -2px -2px 3px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(100, 50, 30, 0.6);
-}
-
-.urchin--medium {
-  width: 26px;
-  height: 26px;
-  background: radial-gradient(circle, rgba(90, 50, 30, 0.85) 0%, rgba(70, 40, 20, 0.75) 100%);
-  box-shadow: inset -3px -3px 4px rgba(0, 0, 0, 0.6), 0 0 0 3px rgba(110, 60, 40, 0.7);
 }
 
 /* Sea Anemone - waving tentacles */

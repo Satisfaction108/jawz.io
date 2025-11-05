@@ -1669,12 +1669,87 @@ function addEnvironmentalElements() {
     if (!world)
         return;
     // Remove existing environmental elements
-    const existingElements = world.querySelectorAll('.seaweed, .coral, .rock, .sand-particle, .bio-light, .floating-log, .lily-pad, .surface-ripple, .bird, .dock, .ocean-floor-bedrock');
+    const existingElements = world.querySelectorAll('.coral-reef, .ocean-floor-bedrock, .terrain-hills');
     existingElements.forEach(el => el.remove());
     // Add solid ocean floor bedrock to prevent seeing past the ocean floor
     const bedrock = document.createElement('div');
     bedrock.className = 'ocean-floor-bedrock';
     world.appendChild(bedrock);
+    // Create continuous wavy terrain layer with rolling hills
+    const terrainLayer = document.createElement('div');
+    terrainLayer.className = 'terrain-hills';
+    // Create SVG for wavy terrain
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 4000 120');
+    svg.setAttribute('preserveAspectRatio', 'none');
+    svg.style.width = '100%';
+    svg.style.height = '120px';
+    // Generate smooth wavy path for rolling hills
+    const numHills = 15;
+    const hillWidth = 4000 / numHills;
+    let pathData = 'M 0 120 L 0 ';
+    const baseHeight = 60;
+    const hillPositions = [];
+    for (let i = 0; i <= numHills; i++) {
+        const x = i * hillWidth;
+        const height = baseHeight +
+            Math.sin(i * 0.8) * 25 +
+            Math.sin(i * 1.3) * 15 +
+            Math.sin(i * 0.5) * 10;
+        const y = 120 - Math.max(20, Math.min(100, height));
+        hillPositions.push({ x, y });
+    }
+    // Create smooth curve using quadratic bezier curves
+    pathData += hillPositions[0].y;
+    for (let i = 0; i < hillPositions.length - 1; i++) {
+        const current = hillPositions[i];
+        const next = hillPositions[i + 1];
+        const midX = (current.x + next.x) / 2;
+        const midY = (current.y + next.y) / 2;
+        pathData += ` Q ${current.x} ${current.y}, ${midX} ${midY}`;
+    }
+    pathData += ` L ${hillPositions[hillPositions.length - 1].x} ${hillPositions[hillPositions.length - 1].y}`;
+    pathData += ' L 4000 120 Z';
+    // Create filled terrain path
+    const terrainPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    terrainPath.setAttribute('d', pathData);
+    terrainPath.setAttribute('fill', 'url(#terrainGradient)');
+    terrainPath.setAttribute('opacity', '0.9');
+    // Create dark brown border/outline
+    const borderPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    borderPath.setAttribute('d', pathData);
+    borderPath.setAttribute('fill', 'none');
+    borderPath.setAttribute('stroke', 'rgba(50, 35, 25, 0.95)');
+    borderPath.setAttribute('stroke-width', '3');
+    borderPath.setAttribute('stroke-linecap', 'round');
+    borderPath.setAttribute('stroke-linejoin', 'round');
+    // Create gradient
+    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+    const gradient = document.createElementNS('http://www.w3.org/2000/svg', 'linearGradient');
+    gradient.setAttribute('id', 'terrainGradient');
+    gradient.setAttribute('x1', '0%');
+    gradient.setAttribute('y1', '0%');
+    gradient.setAttribute('x2', '0%');
+    gradient.setAttribute('y2', '100%');
+    const stops = [
+        { offset: '0%', color: 'rgba(60, 45, 30, 0.95)' },
+        { offset: '20%', color: 'rgba(75, 55, 40, 0.9)' },
+        { offset: '50%', color: 'rgba(90, 70, 50, 0.85)' },
+        { offset: '80%', color: 'rgba(100, 80, 60, 0.75)' },
+        { offset: '100%', color: 'rgba(105, 85, 65, 0.5)' }
+    ];
+    stops.forEach(stop => {
+        const stopEl = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+        stopEl.setAttribute('offset', stop.offset);
+        stopEl.setAttribute('stop-color', stop.color);
+        gradient.appendChild(stopEl);
+    });
+    defs.appendChild(gradient);
+    svg.appendChild(defs);
+    svg.appendChild(terrainPath);
+    svg.appendChild(borderPath);
+    terrainLayer.appendChild(svg);
+    world.appendChild(terrainLayer);
     // === OCEAN FLOOR ELEMENTS (ENHANCED WITH OVERLAP PREVENTION) ===
     // Helper function to check if a position overlaps with existing positions
     const checkOverlap = (newPos, existingPositions, minDistance) => {
@@ -1691,209 +1766,49 @@ function addEnvironmentalElements() {
         // If we can't find a non-overlapping position, return a random one
         return Math.random() * 100;
     };
-    // Helper function to calculate terrain height at a given horizontal position
+    // Helper function to calculate terrain height from SVG hill positions
     const getTerrainHeight = (horizontalPercent) => {
-        // Simulate the terrain variations from the CSS gradients
-        // Hills and elevated areas (higher = closer to surface)
-        let height = 0;
-        // Hill at 8% position
-        if (horizontalPercent >= 5 && horizontalPercent <= 15) {
-            const hillCenter = 8;
-            const distance = Math.abs(horizontalPercent - hillCenter);
-            height += Math.max(0, 40 - (distance * 4)); // Peak of 40px
+        const xPos = (horizontalPercent / 100) * 4000;
+        // Find the two nearest hill points
+        let leftPoint = hillPositions[0];
+        let rightPoint = hillPositions[hillPositions.length - 1];
+        for (let i = 0; i < hillPositions.length - 1; i++) {
+            if (hillPositions[i].x <= xPos && hillPositions[i + 1].x >= xPos) {
+                leftPoint = hillPositions[i];
+                rightPoint = hillPositions[i + 1];
+                break;
+            }
         }
-        // Hill at 25% position
-        if (horizontalPercent >= 20 && horizontalPercent <= 35) {
-            const hillCenter = 25;
-            const distance = Math.abs(horizontalPercent - hillCenter);
-            height += Math.max(0, 30 - (distance * 3)); // Peak of 30px
-        }
-        // Hill at 45% position
-        if (horizontalPercent >= 40 && horizontalPercent <= 55) {
-            const hillCenter = 45;
-            const distance = Math.abs(horizontalPercent - hillCenter);
-            height += Math.max(0, 35 - (distance * 3.5)); // Peak of 35px
-        }
-        // Hill at 68% position
-        if (horizontalPercent >= 60 && horizontalPercent <= 75) {
-            const hillCenter = 68;
-            const distance = Math.abs(horizontalPercent - hillCenter);
-            height += Math.max(0, 45 - (distance * 4)); // Peak of 45px
-        }
-        // Hill at 85% position
-        if (horizontalPercent >= 80 && horizontalPercent <= 95) {
-            const hillCenter = 85;
-            const distance = Math.abs(horizontalPercent - hillCenter);
-            height += Math.max(0, 38 - (distance * 3.8)); // Peak of 38px
-        }
-        // Valleys (negative height = deeper)
-        // Valley at 18% position
-        if (horizontalPercent >= 15 && horizontalPercent <= 25) {
-            const valleyCenter = 18;
-            const distance = Math.abs(horizontalPercent - valleyCenter);
-            height -= Math.max(0, 20 - (distance * 4)); // Depth of -20px
-        }
-        // Valley at 58% position
-        if (horizontalPercent >= 50 && horizontalPercent <= 65) {
-            const valleyCenter = 58;
-            const distance = Math.abs(horizontalPercent - valleyCenter);
-            height -= Math.max(0, 25 - (distance * 3.5)); // Depth of -25px
-        }
-        return height;
+        // Linear interpolation between the two points
+        const t = (xPos - leftPoint.x) / (rightPoint.x - leftPoint.x);
+        const interpolatedY = leftPoint.y + (rightPoint.y - leftPoint.y) * t;
+        // Convert from SVG coordinates (0-120, where 0 is top) to height above bottom
+        return 120 - interpolatedY;
     };
-    // Track positions for overlap prevention
-    const seaweedPositions = [];
-    const coralPositions = [];
-    const rockPositions = [];
-    // Add seaweed along the bottom (increased count: 2-3x more)
-    const seaweedCount = 20 + Math.floor(Math.random() * 6); // 20-25 seaweed plants
-    for (let i = 0; i < seaweedCount; i++) {
-        const seaweed = document.createElement('div');
-        const types = ['seaweed--tall', 'seaweed--medium', 'seaweed--short'];
-        const type = types[Math.floor(Math.random() * types.length)];
-        seaweed.className = `seaweed ${type}`;
-        // Find position with minimal overlap (3% minimum distance)
-        const position = findNonOverlappingPosition(seaweedPositions, 3);
-        seaweedPositions.push(position);
-        seaweed.style.left = `${position}%`;
-        // Position seaweed at terrain height
-        const terrainHeight = getTerrainHeight(position);
-        seaweed.style.bottom = `${terrainHeight}px`;
-        world.appendChild(seaweed);
-    }
-    // Add coral formations (increased count: 2-3x more)
-    const coralCount = 15 + Math.floor(Math.random() * 6); // 15-20 coral pieces
-    for (let i = 0; i < coralCount; i++) {
-        const coral = document.createElement('div');
-        const types = ['coral--brain', 'coral--fan', 'coral--tube'];
-        const type = types[Math.floor(Math.random() * types.length)];
-        coral.className = `coral ${type}`;
-        // Find position with minimal overlap (4% minimum distance for coral)
-        const position = findNonOverlappingPosition([...seaweedPositions, ...coralPositions], 4);
-        coralPositions.push(position);
-        coral.style.left = `${position}%`;
-        // Position coral at terrain height
-        const terrainHeight = getTerrainHeight(position);
-        coral.style.bottom = `${terrainHeight}px`;
-        world.appendChild(coral);
-    }
-    // Add rocks scattered on the ocean floor (increased count: 2-3x more)
-    const rockCount = 20 + Math.floor(Math.random() * 6); // 20-25 rocks
-    for (let i = 0; i < rockCount; i++) {
-        const rock = document.createElement('div');
-        const types = ['rock--large', 'rock--medium', 'rock--small'];
-        const type = types[Math.floor(Math.random() * types.length)];
-        rock.className = `rock ${type}`;
-        // Find position with minimal overlap (3.5% minimum distance for rocks)
-        const position = findNonOverlappingPosition([...seaweedPositions, ...coralPositions, ...rockPositions], 3.5);
-        rockPositions.push(position);
-        rock.style.left = `${position}%`;
-        // Position rock at terrain height
-        const terrainHeight = getTerrainHeight(position);
-        rock.style.bottom = `${terrainHeight}px`;
-        world.appendChild(rock);
-    }
-    // Add shells scattered on ocean floor (30-40 shells)
-    const shellCount = 30 + Math.floor(Math.random() * 11); // 30-40 shells
-    for (let i = 0; i < shellCount; i++) {
-        const shell = document.createElement('div');
-        const types = ['shell--small', 'shell--medium', 'shell--large'];
-        const type = types[Math.floor(Math.random() * types.length)];
-        shell.className = `shell ${type}`;
-        // Find position with minimal overlap (2% minimum distance for shells)
-        const position = findNonOverlappingPosition([...seaweedPositions, ...coralPositions, ...rockPositions], 2);
-        shell.style.left = `${position}%`;
-        // Position shell at terrain height
-        const terrainHeight = getTerrainHeight(position);
-        shell.style.bottom = `${terrainHeight}px`;
-        world.appendChild(shell);
-    }
-    // Add starfish on ocean floor (15-20 starfish)
-    const starfishCount = 15 + Math.floor(Math.random() * 6); // 15-20 starfish
-    for (let i = 0; i < starfishCount; i++) {
-        const starfish = document.createElement('div');
-        const types = ['starfish--small', 'starfish--medium'];
-        const type = types[Math.floor(Math.random() * types.length)];
-        starfish.className = `starfish ${type}`;
-        // Find position with minimal overlap (2.5% minimum distance)
-        const position = findNonOverlappingPosition([...seaweedPositions, ...coralPositions, ...rockPositions], 2.5);
-        starfish.style.left = `${position}%`;
-        // Position starfish at terrain height
-        const terrainHeight = getTerrainHeight(position);
-        starfish.style.bottom = `${terrainHeight}px`;
-        world.appendChild(starfish);
-    }
-    // Add sea urchins on ocean floor (10-15 urchins)
-    const urchinCount = 10 + Math.floor(Math.random() * 6); // 10-15 urchins
-    for (let i = 0; i < urchinCount; i++) {
-        const urchin = document.createElement('div');
-        const types = ['urchin--small', 'urchin--medium'];
-        const type = types[Math.floor(Math.random() * types.length)];
-        urchin.className = `urchin ${type}`;
-        // Find position with minimal overlap (2.5% minimum distance)
-        const position = findNonOverlappingPosition([...seaweedPositions, ...coralPositions, ...rockPositions], 2.5);
-        urchin.style.left = `${position}%`;
-        // Position urchin at terrain height
-        const terrainHeight = getTerrainHeight(position);
-        urchin.style.bottom = `${terrainHeight}px`;
-        world.appendChild(urchin);
-    }
-    // Add sea anemones on ocean floor (8-12 anemones)
-    const anemoneCount = 8 + Math.floor(Math.random() * 5); // 8-12 anemones
-    for (let i = 0; i < anemoneCount; i++) {
-        const anemone = document.createElement('div');
-        const types = ['anemone--small', 'anemone--medium'];
-        const type = types[Math.floor(Math.random() * types.length)];
-        anemone.className = `anemone ${type}`;
-        // Find position with minimal overlap (3% minimum distance)
-        const position = findNonOverlappingPosition([...seaweedPositions, ...coralPositions, ...rockPositions], 3);
-        anemone.style.left = `${position}%`;
-        // Position anemone at terrain height
-        const terrainHeight = getTerrainHeight(position);
-        anemone.style.bottom = `${terrainHeight}px`;
-        world.appendChild(anemone);
-    }
-    // Add pebbles scattered on ocean floor (50-70 pebbles)
-    const pebbleCount = 50 + Math.floor(Math.random() * 21); // 50-70 pebbles
-    for (let i = 0; i < pebbleCount; i++) {
-        const pebble = document.createElement('div');
-        const types = ['pebble--tiny', 'pebble--small', 'pebble--medium'];
-        const type = types[Math.floor(Math.random() * types.length)];
-        pebble.className = `pebble ${type}`;
-        // Find position with minimal overlap (1.5% minimum distance for small pebbles)
-        const position = findNonOverlappingPosition([...seaweedPositions, ...coralPositions, ...rockPositions], 1.5);
-        pebble.style.left = `${position}%`;
-        // Position pebble at terrain height
-        const terrainHeight = getTerrainHeight(position);
-        pebble.style.bottom = `${terrainHeight}px`;
-        world.appendChild(pebble);
-    }
-    // === SURFACE ELEMENTS (OPTIMIZED) ===
-    // Add floating logs and debris (reduced count)
-    const logCount = 3 + Math.floor(Math.random() * 2); // 3-5 floating logs
-    for (let i = 0; i < logCount; i++) {
-        const log = document.createElement('div');
-        const types = ['floating-log--medium', 'floating-log--small'];
-        const type = types[Math.floor(Math.random() * types.length)];
-        log.className = `floating-log ${type}`;
-        log.style.left = `${Math.random() * 100}%`;
-        world.appendChild(log);
-    }
-    // Add lily pads (reduced count)
-    const lilyCount = 4 + Math.floor(Math.random() * 3); // 4-7 lily pads
-    for (let i = 0; i < lilyCount; i++) {
-        const lily = document.createElement('div');
-        lily.className = 'lily-pad';
-        lily.style.left = `${Math.random() * 100}%`;
-        world.appendChild(lily);
-    }
-    // Add dock structures (reduced count)
-    const dockCount = 1 + Math.floor(Math.random() * 1); // 1-2 docks
-    for (let i = 0; i < dockCount; i++) {
-        const dock = document.createElement('div');
-        dock.className = 'dock';
-        dock.style.left = `${20 + (i * 50)}%`;
-        world.appendChild(dock);
+    // === ALL OCEAN FLOOR ENVIRONMENTAL ELEMENTS REMOVED ===
+    // Removed: seaweed, coral, rocks, starfish, sea urchins
+    // New: Continuous coral reef strip using CoralReef.png
+    // Create continuous coral reef strip across the entire ocean floor
+    const worldWidth = 4000; // World width in pixels
+    const coralReefWidth = 1805; // CoralReef.png width in pixels
+    const coralReefHeight = 1015; // CoralReef.png height in pixels
+    // Resize the coral reef to be more appropriate for the ocean floor (scale down to ~40% of original size)
+    const scaledWidth = Math.floor(coralReefWidth * 0.4); // 722px
+    const scaledHeight = Math.floor(coralReefHeight * 0.4); // 406px
+    // Calculate how many images needed to cover the world width
+    const numReefImages = Math.ceil(worldWidth / scaledWidth);
+    // Create and position each coral reef image
+    for (let i = 0; i < numReefImages; i++) {
+        const reef = document.createElement('img');
+        reef.src = '/props/CoralReef.png';
+        reef.alt = 'coral reef';
+        reef.className = 'coral-reef';
+        // Position at bottom with 1px overlap to eliminate gaps (cumulative shift left by i pixels)
+        reef.style.left = `${i * scaledWidth - i}px`;
+        reef.style.bottom = '0px';
+        reef.style.width = `${scaledWidth}px`;
+        reef.style.height = `${scaledHeight}px`;
+        world.appendChild(reef);
     }
 }
 // Ambient particle spawning (throttled) - OPTIMIZED: reduced frequency and count
